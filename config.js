@@ -1,0 +1,12 @@
+import 'dotenv/config';
+export const {
+  PORT,
+  PUBLIC_URL,
+  TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN,
+  TWILIO_PHONE_NUMBER,
+  OPENAI_API_KEY,
+  EVENTS_ENDPOINT,
+  HABITICA_USER_ID,
+  HABITICA_API_TOKEN
+} = process.env;
