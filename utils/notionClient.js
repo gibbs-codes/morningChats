@@ -193,7 +193,8 @@ class NotionClient {
       'busy': 'Line was busy - were you avoiding the call or actually unavailable?',
       'failed': 'Call failed to connect - technical issue or excuse?',
       'canceled': 'Call was canceled - you actively chose to avoid accountability.',
-      'timeout': 'No answer within timeout period - you saw it ring and ignored it.'
+      'timeout': 'No answer within timeout period - you saw it ring and ignored it.',
+      'voicemail-answered': 'Voicemail picked up instead of you. Still counts as avoiding direct accountability.'
     };
     
     return reasons[reason] || `Unknown reason: ${reason}. Still counts as avoidance.`;
@@ -273,12 +274,14 @@ class NotionClient {
             }]
           },
           
-          // NEW FIELDS - Session Type as select
-          "Session Type": {
-            select: { 
-              name: this.determineSessionType(sessionData)
+          // Only add Session Type if it exists in the database
+          ...(await this.fieldExists(databaseId, 'Session Type') ? {
+            "Session Type": {
+              select: { 
+                name: this.determineSessionType(sessionData)
+              }
             }
-          },
+          } : {}),
           
           // Duration as number (minutes)
           "Duration": {
@@ -389,6 +392,17 @@ class NotionClient {
       return 'Low';
     } else {
       return 'Medium';
+    }
+  }
+
+  // Helper: Check if a field exists in the database
+  async fieldExists(databaseId, fieldName) {
+    try {
+      const schema = await this.getDatabaseSchema(databaseId);
+      return schema && schema[fieldName];
+    } catch (error) {
+      console.log(`⚠️ Could not check if field "${fieldName}" exists, skipping...`);
+      return false;
     }
   }
 

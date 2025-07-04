@@ -1,4 +1,4 @@
-// Enhanced gather.js with better session ending
+// Enhanced gather.js with voicemail detection and better session ending
 import pkg from 'twilio';
 const { twiml } = pkg;
 import { ctx } from '../memory/context.js';
@@ -15,6 +15,26 @@ export async function handleGather(req, res) {
   console.log(`🎤 User said: "${userInput}"`);
 
   const response = new twiml.VoiceResponse();
+
+  // DETECT VOICEMAIL/ANSWERING MACHINE - this is key!
+  if (isVoicemailMessage(userInput)) {
+    console.log('🤖 VOICEMAIL DETECTED - Ending call and logging as missed');
+    
+    // Log this as a missed call, not a successful session
+    if (process.env.NOTION_LOGS_DB_ID) {
+      await notionClient.logMissedCall(process.env.NOTION_LOGS_DB_ID, req.body.To, 'voicemail-answered');
+      console.log('📝 Voicemail interaction logged as missed call');
+    }
+    
+    // Clean up and hang up
+    await endSession(callSid);
+    ctx.clear(callSid);
+    
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Voicemail detected. Call back when you can actually talk.');
+    response.hangup();
+    
+    return res.type('text/xml').send(response.toString());
+  }
 
   // Enhanced session ending detection
   if (isSessionEnding(userInput)) {
@@ -132,6 +152,25 @@ export async function handleGather(req, res) {
   }
 }
 
+// VOICEMAIL DETECTION - This is the key function!
+function isVoicemailMessage(userInput) {
+  const voicemailPatterns = [
+    /not available.*leave.*message/i,
+    /can't come to.*phone/i,
+    /leave.*message.*after.*tone/i,
+    /press.*for.*delivery.*options/i,
+    /nothing.*recorded.*hang.*up/i,
+    /message.*after.*tone.*hang.*up/i,
+    /simply.*hang.*up/i,
+    /your.*message.*after.*beep/i,
+    /please.*leave.*your.*name/i,
+    /mailbox.*full/i,
+    /unavailable.*right.*now/i
+  ];
+  
+  return voicemailPatterns.some(pattern => pattern.test(userInput.toLowerCase()));
+}
+
 // Better session ending detection
 function isSessionEnding(userInput) {
   const endPhrases = [
@@ -145,7 +184,7 @@ function isSessionEnding(userInput) {
   return endPhrases.some(pattern => pattern.test(userInput.trim()));
 }
 
-// Enhanced session ending
+// Enhanced session ending - ONLY called from gather, not status
 async function handleSessionEnd(callSid, userInput, response, res) {
   try {
     console.log('🏁 Processing session end...');
@@ -157,13 +196,8 @@ async function handleSessionEnd(callSid, userInput, response, res) {
     // Extract session insights for Notion
     const sessionInsights = extractSessionInsights(conversationHistory, session);
     
-    // End the session (this saves to MongoDB)
+    // End the session (this saves to MongoDB) - ONLY ONCE
     const sessionData = await endSession(callSid);
-    
-    // Save to your Notion "Morning Check In" database
-    if (process.env.NOTION_CHECKIN_DB_ID) {
-      await saveToNotionCheckIn(sessionInsights);
-    }
     
     // Clean up context
     ctx.clear(callSid);
@@ -253,51 +287,6 @@ function extractSessionInsights(conversationHistory, session) {
   insights.notes = keyPoints.join('. ') || 'Brief check-in completed';
   
   return insights;
-}
-
-// Save to your Notion Morning Check In database
-async function saveToNotionCheckIn(insights) {
-  try {
-    console.log('💾 Saving to Notion Check-In database...');
-    
-    const response = await fetch(`https://api.notion.com/v1/pages`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.NOTION_API_KEY}`,
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28'
-      },
-      body: JSON.stringify({
-        parent: { database_id: process.env.NOTION_CHECKIN_DB_ID },
-        properties: {
-          'Date': {
-            date: { start: insights.date }
-          },
-          'Priorities': {
-            multi_select: insights.priorities.map(priority => ({ name: priority }))
-          },
-          'Mood': {
-            select: { name: insights.mood }
-          },
-          'Energy Level': {
-            select: { name: insights.energyLevel }
-          },
-          'Notes': {
-            rich_text: [{ text: { content: insights.notes } }]
-          }
-        }
-      })
-    });
-    
-    if (response.ok) {
-      console.log('✅ Successfully saved to Notion Check-In database');
-    } else {
-      console.error('❌ Failed to save to Notion:', await response.text());
-    }
-    
-  } catch (error) {
-    console.error('❌ Error saving to Notion Check-In:', error);
-  }
 }
 
 // Get appropriate ending message based on session

@@ -63,8 +63,8 @@ export async function handleVoice(req, res) {
       hints: 'DTT, office attendance, yes, no, done, fifteen minutes' // Help speech recognition
     });
     
-    // Add a MORE DOMINANT fallback for no response
-    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Still there? Stop wasting time. What are you doing first?');
+    // Add MORE ALPHA fallback for no response
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Still there? Stop wasting my time. What are you doing?');
     response.gather({ 
       input: 'speech', 
       action: '/gather', 
@@ -72,8 +72,8 @@ export async function handleVoice(req, res) {
       timeout: 5
     });
     
-    // Final DOMINANT fallback - end call with accountability
-    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Not responding counts as avoidance. Call me back when you are ready to work.');
+    // Final ALPHA fallback - end call with accountability
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Not responding? Call back when you are ready to work.');
     response.hangup();
     
     res.type('text/xml').send(response.toString());
@@ -110,11 +110,11 @@ export async function handleVoice(req, res) {
 function generateDominantOpener(habits, events) {
   const hour = new Date().getHours();
   
-  // MORE DOMINANT time-based greetings
-  const greeting = hour < 7 ? "Early. Good." : 
+  // ALPHA time-based greetings
+  const greeting = hour < 7 ? "Early. Good boy." : 
                   hour < 8 ? "On time. Let's work." :
                   hour < 9 ? "Morning." : 
-                  hour < 10 ? "Getting late." : "Already behind schedule.";
+                  hour < 10 ? "Running late already?" : "Behind schedule. Typical.";
   
   // Get upcoming events in next few hours
   const now = new Date();
@@ -129,19 +129,19 @@ function generateDominantOpener(habits, events) {
   
   let details = [];
   
-  // Add urgent events with PRESSURE
+  // Add urgent events with ALPHA PRESSURE
   if (soonEvents.length > 0) {
     const nextEvent = soonEvents[0];
     const minutesUntil = Math.floor((new Date(nextEvent.start) - now) / 60000);
     
     if (minutesUntil < 60) {
-      details.push(`${nextEvent.title} in ${minutesUntil} minutes. Prep time.`);
+      details.push(`${nextEvent.title} in ${minutesUntil} minutes. Move.`);
     } else if (minutesUntil < 90) {
-      details.push(`${nextEvent.title} soon. Ready?`);
+      details.push(`${nextEvent.title} coming up. Ready?`);
     }
   }
   
-  // Add habits with COMMANDING tone
+  // Add habits with COMMANDING Alpha tone
   if (topHabits.length > 0) {
     const habitNames = topHabits.map(h => {
       const text = h.text || h.title || 'Task';
@@ -149,40 +149,46 @@ function generateDominantOpener(habits, events) {
     });
     
     if (habitNames.length === 1) {
-      details.push(`${habitNames[0]} needs doing.`);
+      details.push(`${habitNames[0]} waiting.`);
     } else {
-      details.push(`${habitNames[0]} and ${habitNames[1]} waiting.`);
+      details.push(`${habitNames[0]} and ${habitNames[1]} both waiting.`);
     }
   }
   
-  // Build DOMINANT opener
+  // Build ALPHA opener
   if (details.length === 0) {
-    return `${greeting} No excuses today. What's your focus?`;
+    return `${greeting} What's your focus today?`;
   }
   
   if (details.length === 1) {
-    return `${greeting} ${details[0]} Start now or explain why not.`;
+    return `${greeting} ${details[0]} How long?`;
   }
   
-  return `${greeting} ${details.join(' ')} Pick one and commit.`;
+  return `${greeting} ${details.join(' ')} Pick one.`;
 }
 
 // Enhanced status callback with MISSED CALL ACCOUNTABILITY
 export async function handleStatus(req, res) {
   const callSid = req.body.CallSid;
   const callStatus = req.body.CallStatus;
-  const phoneNumber = req.body.To; // Get the phone number for logging
+  const phoneNumber = req.body.To;
   
   console.log(`📊 Call status update: ${callSid} -> ${callStatus}`);
   
-  // Log missed calls for ACCOUNTABILITY
+  // Log ONLY true missed calls for ACCOUNTABILITY (not when they hang up properly)
   if (callStatus === 'no-answer' || callStatus === 'failed' || callStatus === 'canceled') {
     console.log(`🚨 MISSED CALL DETECTED: ${callStatus}`);
     
-    // Log to Notion for accountability tracking
-    if (process.env.NOTION_LOGS_DB_ID) {
-      await notionClient.logMissedCall(process.env.NOTION_LOGS_DB_ID, phoneNumber, callStatus);
-      console.log('📝 Missed call logged to Notion for accountability');
+    // Only log if session wasn't already ended properly by gather handler
+    const session = getSession(callSid);
+    if (session && session.sessionData.state !== 'ended') {
+      // Log to Notion for accountability tracking
+      if (process.env.NOTION_LOGS_DB_ID) {
+        await notionClient.logMissedCall(process.env.NOTION_LOGS_DB_ID, phoneNumber, callStatus);
+        console.log('📝 Missed call logged to Notion for accountability');
+      }
+    } else {
+      console.log('⚠️ Session already ended properly, skipping missed call log');
     }
     
     // Clean up any session that might have been created
@@ -192,7 +198,11 @@ export async function handleStatus(req, res) {
   
   if (callStatus === 'completed') {
     console.log(`🧹 Cleaning up completed call: ${callSid}`);
-    await endSession(callSid);
+    // Only clean up if session wasn't already ended by gather handler
+    const session = getSession(callSid);
+    if (session && session.sessionData.state !== 'ended') {
+      await endSession(callSid);
+    }
     ctx.clear(callSid);
   }
   

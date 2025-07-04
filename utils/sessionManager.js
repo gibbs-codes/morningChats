@@ -121,6 +121,9 @@ export class SessionManager {
     try {
       console.log('🏁 Ending session, analyzing conversation...');
       
+      // Mark session as ended to prevent double logging
+      this.sessionData.state = 'ended';
+      
       // Analyze the session with LLM (with robust parsing)
       let sessionAnalysis;
       try {
