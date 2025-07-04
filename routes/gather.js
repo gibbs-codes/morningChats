@@ -155,6 +155,7 @@ export async function handleGather(req, res) {
 // VOICEMAIL DETECTION - This is the key function!
 function isVoicemailMessage(userInput) {
   const voicemailPatterns = [
+    // Standard voicemail messages
     /not available.*leave.*message/i,
     /can't come to.*phone/i,
     /leave.*message.*after.*tone/i,
@@ -165,10 +166,28 @@ function isVoicemailMessage(userInput) {
     /your.*message.*after.*beep/i,
     /please.*leave.*your.*name/i,
     /mailbox.*full/i,
-    /unavailable.*right.*now/i
+    /unavailable.*right.*now/i,
+    
+    // Phone number patterns (voicemail often just says the number)
+    /^\d{3}[-.]?\d{3}[-.]?\d{4}\.?$/,  // 8583866200 or 858-386-6200
+    /^you'?ve reached.*/i,
+    /^this is.*(voicemail|message)/i,
+    /^hello.*not here/i,
+    /^sorry.*missed.*call/i,
+    
+    // Short automated responses that indicate voicemail
+    /^\d{5,}\.?$/,  // Just a long number like "66200"
+    /^at the tone/i,
+    /^please record/i
   ];
   
-  return voicemailPatterns.some(pattern => pattern.test(userInput.toLowerCase()));
+  // Also check if it's suspiciously short and numeric (likely voicemail fragment)
+  const isShortNumeric = /^\d{3,10}\.?$/.test(userInput.trim());
+  const isSuspiciouslyShort = userInput.trim().length < 15 && userInput.includes('6');
+  
+  return voicemailPatterns.some(pattern => pattern.test(userInput.toLowerCase())) || 
+         isShortNumeric || 
+         isSuspiciouslyShort;
 }
 
 // Better session ending detection

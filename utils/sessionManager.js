@@ -124,26 +124,30 @@ export class SessionManager {
       // Mark session as ended to prevent double logging
       this.sessionData.state = 'ended';
       
-      // Analyze the session with LLM (with robust parsing)
+      // Check if this was a real conversation or just voicemail/short interaction
+      const conversationLength = this.sessionData.conversation.length;
+      const userMessages = this.sessionData.conversation.filter(msg => msg.user && msg.user.trim().length > 5);
+      
+      console.log(`📊 Conversation analysis: ${conversationLength} total exchanges, ${userMessages.length} meaningful user messages`);
+      
       let sessionAnalysis;
-      try {
-        sessionAnalysis = await analyzeSession(
-          this.sessionData.conversation,
-          this.sessionData.decisions
-        );
-        console.log('✅ Session analysis successful:', sessionAnalysis);
-      } catch (analysisError) {
-        console.error('❌ Session analysis failed:', analysisError);
-        // Use a simple fallback analysis
-        sessionAnalysis = {
-          key_decisions: ['Session completed'],
-          commitments: this.sessionData.decisions.slice(0, 3).map(d => ({
-            task: typeof d === 'string' ? d : d.decision || 'Task mentioned',
-            timeframe: 'Session'
-          })),
-          mood_energy: 'Session completed successfully',
-          session_outcome: 'brief'
-        };
+      
+      // Only do LLM analysis for real conversations
+      if (userMessages.length >= 2 && conversationLength >= 3) {
+        try {
+          console.log('🧠 Real conversation detected, running LLM analysis...');
+          sessionAnalysis = await analyzeSession(
+            this.sessionData.conversation,
+            this.sessionData.decisions
+          );
+          console.log('✅ Session analysis successful:', sessionAnalysis);
+        } catch (analysisError) {
+          console.error('❌ Session analysis failed:', analysisError);
+          sessionAnalysis = this.createBasicFallbackAnalysis();
+        }
+      } else {
+        console.log('⚠️ Short/minimal conversation detected, using basic analysis');
+        sessionAnalysis = this.createMinimalSessionAnalysis(userMessages);
       }
       
       const sessionRecord = {
@@ -217,6 +221,47 @@ export class SessionManager {
         decisions: this.sessionData.decisions
       };
     }
+  }
+  
+  // Create analysis for minimal/short sessions (likely voicemail or hang-ups)
+  createMinimalSessionAnalysis(userMessages) {
+    const firstMessage = userMessages[0]?.user || '';
+    
+    // Check if this looks like voicemail response
+    if (/^\d+\.?$/.test(firstMessage) || firstMessage.length < 10) {
+      return {
+        key_decisions: ['Minimal interaction - likely voicemail or technical issue'],
+        commitments: [{
+          task: 'No meaningful commitments made',
+          timeframe: 'N/A'
+        }],
+        mood_energy: 'Unknown - insufficient interaction',
+        session_outcome: 'brief'
+      };
+    }
+    
+    return {
+      key_decisions: ['Brief check-in completed'],
+      commitments: [{
+        task: 'Quick morning check-in',
+        timeframe: 'Session'
+      }],
+      mood_energy: 'Brief but engaged',
+      session_outcome: 'brief'
+    };
+  }
+  
+  // Create basic fallback when LLM fails
+  createBasicFallbackAnalysis() {
+    return {
+      key_decisions: ['Session completed with technical difficulties'],
+      commitments: [{
+        task: 'Morning check-in attempted',
+        timeframe: 'Session duration'
+      }],
+      mood_energy: 'Unable to analyze due to technical issues',
+      session_outcome: 'brief'
+    };
   }
   
   async getRecentSessions(days = 7) {

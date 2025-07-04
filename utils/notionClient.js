@@ -340,8 +340,11 @@ class NotionClient {
   extractPriorities(sessionData) {
     const priorities = [];
     
-    // Extract from goals if available
-    if (sessionData.goals && sessionData.goals !== 'No specific goals set') {
+    // Extract from goals if available and meaningful
+    if (sessionData.goals && 
+        sessionData.goals !== 'No specific goals set' && 
+        sessionData.goals !== 'No meaningful commitments made' &&
+        sessionData.goals !== 'Quick morning check-in') {
       priorities.push(sessionData.goals);
     }
     
@@ -353,9 +356,15 @@ class NotionClient {
       }
     }
     
-    // Default if nothing found
+    // Check if this was likely a voicemail/minimal interaction
+    if (sessionData.goals === 'No meaningful commitments made' || 
+        sessionData.summary?.includes('likely voicemail')) {
+      return 'VOICEMAIL/MINIMAL INTERACTION - No real priorities discussed';
+    }
+    
+    // Default if nothing meaningful found
     if (priorities.length === 0) {
-      priorities.push('Daily planning and check-in');
+      return 'Brief check-in - minimal engagement';
     }
     
     return [...new Set(priorities)].join(', '); // Remove duplicates
@@ -440,8 +449,17 @@ class NotionClient {
   extractCommitments(sessionData) {
     const commitments = [];
     
+    // Check for voicemail/minimal interaction first
+    if (sessionData.goals === 'No meaningful commitments made' || 
+        sessionData.summary?.includes('likely voicemail')) {
+      return 'NONE - Voicemail or minimal interaction detected';
+    }
+    
     // Extract from sessionData.goals if it contains specific commitments
-    if (sessionData.goals && sessionData.goals !== 'No specific goals set' && sessionData.goals !== 'Morning check-in completed') {
+    if (sessionData.goals && 
+        sessionData.goals !== 'No specific goals set' && 
+        sessionData.goals !== 'Morning check-in completed' &&
+        sessionData.goals !== 'Quick morning check-in') {
       commitments.push(sessionData.goals);
     }
     
@@ -464,7 +482,7 @@ class NotionClient {
     
     // Default if no specific commitments found
     if (commitments.length === 0) {
-      return 'Completed morning check-in and planning';
+      return 'Brief interaction - minimal commitments made';
     }
     
     return [...new Set(commitments)].join(' | '); // Remove duplicates and join
