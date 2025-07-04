@@ -195,8 +195,14 @@ export class SessionManager {
         console.error('❌ MongoDB save failed:', mongoError);
       }
       
-      // **FIXED**: Skip Notion logging for voicemail (already logged in gather.js)
-      if (!this.sessionData.isVoicemail && process.env.NOTION_LOGS_DB_ID && process.env.NOTION_API_KEY) {
+      // **CRITICAL FIX**: Skip ALL Notion logging for voicemail sessions
+      if (this.sessionData.isVoicemail) {
+        console.log('🤖 Skipping Notion logging for voicemail (already logged as missed call)');
+        return sessionRecord; // RETURN EARLY - don't log to Notion at all
+      }
+      
+      // Only log to Notion for real conversations
+      if (process.env.NOTION_LOGS_DB_ID && process.env.NOTION_API_KEY) {
         try {
           console.log('💾 Attempting to save to Notion...');
           
@@ -223,8 +229,6 @@ export class SessionManager {
             console.error('Notion API Response:', await notionError.response.text());
           }
         }
-      } else if (this.sessionData.isVoicemail) {
-        console.log('🤖 Skipping Notion logging for voicemail (already logged as missed call)');
       } else {
         console.log('⚠️ Notion not configured (missing NOTION_LOGS_DB_ID or NOTION_API_KEY)');
       }
@@ -376,6 +380,11 @@ export function getSession(callSid) {
     activeSessions.set(callSid, new SessionManager(callSid));
   }
   return activeSessions.get(callSid);
+}
+
+// **NEW**: Check if session exists without creating one
+export function sessionExists(callSid) {
+  return activeSessions.has(callSid);
 }
 
 export async function endSession(callSid) {

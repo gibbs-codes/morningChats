@@ -2,7 +2,7 @@
 import pkg from 'twilio';
 const { twiml } = pkg;
 import { getTodayPlan } from '../utils/getTodayPlan.js';
-import { getSession, endSession } from '../utils/sessionManager.js';
+import { getSession, endSession, sessionExists } from '../utils/sessionManager.js'; // Add sessionExists
 import { ctx } from '../memory/context.js';
 import { systemPrompt } from '../prompts/systemPrompt.js';
 import { notionClient } from '../utils/notionClient.js';
@@ -167,7 +167,7 @@ function generateDominantOpener(habits, events) {
   return `${greeting} ${details.join(' ')} Pick one.`;
 }
 
-// Enhanced status callback with MISSED CALL ACCOUNTABILITY - FIXED TO PREVENT DOUBLE LOGGING
+// **FIXED**: Enhanced status callback - ONLY log missed calls, don't create new sessions
 export async function handleStatus(req, res) {
   const callSid = req.body.CallSid;
   const callStatus = req.body.CallStatus;
@@ -179,34 +179,38 @@ export async function handleStatus(req, res) {
   if (callStatus === 'no-answer' || callStatus === 'failed' || callStatus === 'canceled') {
     console.log(`🚨 MISSED CALL DETECTED: ${callStatus}`);
     
-    // Only log if session wasn't already ended properly by gather handler
-    const session = getSession(callSid);
-    if (session && session.sessionData.state !== 'ended') {
+    // **CRITICAL FIX**: Only log if no session exists at all (true missed call)
+    if (!sessionExists(callSid)) {
       // Log to Notion for accountability tracking
       if (process.env.NOTION_LOGS_DB_ID) {
         await notionClient.logMissedCall(process.env.NOTION_LOGS_DB_ID, phoneNumber, callStatus);
-        console.log('📝 Missed call logged to Notion for accountability');
+        console.log('📝 True missed call logged to Notion for accountability');
       }
-      
-      // Clean up session
-      await endSession(callSid);
     } else {
-      console.log('⚠️ Session already ended properly, skipping missed call log');
+      console.log('⚠️ Session exists - this was handled by gather handler, not a true miss');
     }
     
+    // Clean up any remaining session
+    await endSession(callSid);
     ctx.clear(callSid);
   }
   
   if (callStatus === 'completed') {
     console.log(`🧹 Call completed, checking session state: ${callSid}`);
-    // **FIXED**: Only clean up if session wasn't already ended by gather handler
-    const session = getSession(callSid);
-    if (session && session.sessionData.state !== 'ended') {
-      console.log('⚠️ Session not properly ended by gather handler, ending now...');
-      await endSession(callSid);
+    
+    // **CRITICAL FIX**: Check if session still exists before trying to end it
+    if (sessionExists(callSid)) {
+      const session = getSession(callSid);
+      if (session.sessionData.state !== 'ended') {
+        console.log('⚠️ Session not properly ended by gather handler, ending now...');
+        await endSession(callSid);
+      } else {
+        console.log('✅ Session already ended properly by gather handler');
+      }
     } else {
-      console.log('✅ Session already ended properly by gather handler, just cleaning up context');
+      console.log('✅ No session exists - already cleaned up properly');
     }
+    
     ctx.clear(callSid);
   }
   
