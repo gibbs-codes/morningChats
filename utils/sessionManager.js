@@ -182,11 +182,140 @@ export function getSession(callSid) {
   return activeSessions.get(callSid);
 }
 
-export function endSession(callSid) {
-  const session = activeSessions.get(callSid);
-  if (session) {
-    activeSessions.delete(callSid);
-    return session.endSession();
+// Enhanced endSession method with better error handling
+async endSession() {
+  try {
+    console.log('🏁 Ending session, analyzing conversation...');
+    
+    // Analyze the session with LLM (with our new robust parsing)
+    let sessionAnalysis;
+    try {
+      sessionAnalysis = await analyzeSession(
+        this.sessionData.conversation,
+        this.sessionData.decisions
+      );
+      console.log('✅ Session analysis successful:', sessionAnalysis);
+    } catch (analysisError) {
+      console.error('❌ Session analysis failed:', analysisError);
+      // Use a simple fallback analysis
+      sessionAnalysis = {
+        key_decisions: ['Session completed'],
+        commitments: this.sessionData.decisions.slice(0, 3).map(d => ({
+          task: typeof d === 'string' ? d : d.decision || 'Task mentioned',
+          timeframe: 'Session'
+        })),
+        mood_energy: 'Session completed successfully',
+        session_outcome: 'brief'
+      };
+    }
+    
+    const sessionRecord = {
+      ...this.sessionData,
+      endTime: new Date(),
+      duration: Math.floor((new Date() - this.sessionData.startTime) / 60000), // minutes
+      sessionAnalysis,
+      userId: 'defaultUser',
+      callSid: this.callSid
+    };
+    
+    // Save to MongoDB (detailed technical log) - this seems to work fine
+    try {
+      await memory.insertOne({
+        ...sessionRecord,
+        type: 'enhanced_coaching_session',
+        source: 'morningCoach'
+      });
+      console.log('✅ Successfully saved to MongoDB');
+    } catch (mongoError) {
+      console.error('❌ MongoDB save failed:', mongoError);
+    }
+    
+    // Save to Notion with better error handling and validation
+    if (process.env.NOTION_LOGS_DB_ID && process.env.NOTION_API_KEY) {
+      try {
+        console.log('💾 Attempting to save to Notion...');
+        
+        const notionData = {
+          summary: this.generateSessionSummary(sessionAnalysis),
+          goals: sessionAnalysis.commitments?.map(c => c.task).join(', ') || 'No specific goals set',
+          mood: this.extractMoodFromAnalysis(sessionAnalysis.mood_energy),
+          duration: sessionRecord.duration
+        };
+        
+        console.log('📋 Notion data prepared:', notionData);
+        
+        const notionResult = await notionClient.logMorningSession(process.env.NOTION_LOGS_DB_ID, notionData);
+        
+        if (notionResult && notionResult.id) {
+          console.log('✅ Successfully saved to Notion:', notionResult.id);
+        } else {
+          console.log('⚠️ Notion save returned no ID, might have failed');
+        }
+        
+      } catch (notionError) {
+        console.error('❌ Notion save failed:', notionError);
+        // Log the specific error for debugging
+        if (notionError.response) {
+          console.error('Notion API Response:', await notionError.response.text());
+        }
+      }
+    } else {
+      console.log('⚠️ Notion not configured (missing NOTION_LOGS_DB_ID or NOTION_API_KEY)');
+    }
+    
+    console.log('✅ Session ending process complete');
+    return sessionRecord;
+    
+  } catch (error) {
+    console.error('❌ Error ending session:', error);
+    
+    // Even if everything fails, return a basic session record
+    return {
+      callSid: this.callSid,
+      startTime: this.sessionData.startTime,
+      endTime: new Date(),
+      duration: Math.floor((new Date() - this.sessionData.startTime) / 60000),
+      error: 'Session ended with errors',
+      conversation: this.sessionData.conversation,
+      decisions: this.sessionData.decisions
+    };
   }
-  return null;
+}
+
+// Helper method to extract mood for Notion
+extractMoodFromAnalysis(moodEnergy) {
+  if (!moodEnergy) return 'Neutral';
+  
+  const moodText = moodEnergy.toLowerCase();
+  
+  if (moodText.includes('positive') || moodText.includes('high') || moodText.includes('energetic') || moodText.includes('excited')) {
+    return 'Positive';
+  } else if (moodText.includes('low') || moodText.includes('tired') || moodText.includes('difficult') || moodText.includes('struggle')) {
+    return 'Low';
+  } else if (moodText.includes('focused') || moodText.includes('engaged') || moodText.includes('ready')) {
+    return 'Focused';
+  } else {
+    return 'Neutral';
+  }
+}
+
+// Enhanced session summary generation
+generateSessionSummary(analysis) {
+  try {
+    const commitmentCount = analysis.commitments?.length || 0;
+    const decisionCount = analysis.key_decisions?.length || 0;
+    const outcome = analysis.session_outcome || 'completed';
+    const mood = this.extractMoodFromAnalysis(analysis.mood_energy);
+    
+    if (commitmentCount > 0 && decisionCount > 0) {
+      return `${outcome} session: ${commitmentCount} commitments, ${decisionCount} decisions. Mood: ${mood}`;
+    } else if (commitmentCount > 0) {
+      return `${outcome} session: ${commitmentCount} commitments made. Mood: ${mood}`;
+    } else {
+      return `${outcome} session completed. Mood: ${mood}`;
+    }
+  } catch (error) {
+    console.error('Error generating session summary:', error);
+    return 'Morning coaching session completed';
+  }
 }

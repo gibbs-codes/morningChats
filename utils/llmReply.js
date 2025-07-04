@@ -206,18 +206,22 @@ Response:
   }
 }
 
-// Enhanced function for session analysis
+// Enhanced function for session analysis with better JSON parsing
 export async function analyzeSession(conversation, decisions) {
   try {
+    console.log('🔍 Starting session analysis...');
+    
     const prompt = PromptTemplate.fromTemplate(`
-Analyze this coaching session for logging:
+Analyze this coaching session for logging. Return ONLY valid JSON with no additional text.
 
 CONVERSATION: {conversation}
 DECISIONS MADE: {decisions}
 
-Extract key information:
+Return this exact JSON structure with no explanation or markdown:
 
 {format_instructions}
+
+IMPORTANT: Return ONLY the JSON object, no additional text or explanation.
 `);
     
     const formattedPrompt = await prompt.format({
@@ -226,18 +230,121 @@ Extract key information:
       format_instructions: sessionAnalysisParser.getFormatInstructions()
     });
     
+    console.log('📝 Sending session analysis prompt to LLM...');
     const response = await llm.invoke(formattedPrompt);
-    return await sessionAnalysisParser.parse(response.content);
+    console.log('🔄 Raw session analysis response:', response.content);
+    
+    // Clean and extract JSON - same logic as day analysis
+    let jsonContent = response.content.trim();
+    
+    // Remove any markdown code blocks
+    jsonContent = jsonContent.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    
+    // Remove any text before the JSON object
+    const jsonMatch = jsonContent.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonContent = jsonMatch[0];
+    }
+    
+    console.log('🔧 Cleaned session JSON:', jsonContent);
+    
+    // Try manual JSON parsing first
+    try {
+      const parsed = JSON.parse(jsonContent);
+      console.log('✅ Successfully parsed session JSON:', parsed);
+      
+      // Validate the structure
+      if (parsed.key_decisions && parsed.commitments && parsed.mood_energy && parsed.session_outcome) {
+        return parsed;
+      } else {
+        console.log('⚠️ JSON missing required fields, using fallback...');
+        return createFallbackSessionAnalysis(conversation, decisions);
+      }
+    } catch (parseError) {
+      console.log('❌ Manual JSON parse failed, trying structured parser...');
+      try {
+        return await sessionAnalysisParser.parse(response.content);
+      } catch (structuredError) {
+        console.log('❌ Structured parser also failed, using fallback...');
+        return createFallbackSessionAnalysis(conversation, decisions);
+      }
+    }
     
   } catch (error) {
     console.error('Session analysis error:', error);
-    return {
-      key_decisions: ['Session completed'],
-      commitments: [],
-      mood_energy: 'neutral',
-      session_outcome: 'brief'
-    };
+    return createFallbackSessionAnalysis(conversation, decisions);
   }
+}
+
+// Create fallback session analysis when LLM fails
+function createFallbackSessionAnalysis(conversation, decisions) {
+  console.log('🔄 Creating fallback session analysis...');
+  
+  const keyDecisions = [];
+  const commitments = [];
+  let moodEnergy = 'neutral';
+  let sessionOutcome = 'brief';
+  
+  // Extract decisions from the decisions array
+  if (decisions && decisions.length > 0) {
+    keyDecisions.push(...decisions.slice(0, 3).map(d => 
+      typeof d === 'string' ? d : d.decision || 'Decision made'
+    ));
+  }
+  
+  // Look for time commitments in conversation
+  if (conversation && conversation.length > 0) {
+    const userMessages = conversation
+      .filter(msg => msg.user || (msg.role === 'user'))
+      .map(msg => msg.user || msg.content || '');
+    
+    const combinedText = userMessages.join(' ').toLowerCase();
+    
+    // Extract time commitments
+    const timeMatches = combinedText.match(/\b(\d+)\s*(minutes?|mins?|hours?|hrs?)\b/gi);
+    if (timeMatches) {
+      timeMatches.forEach(match => {
+        commitments.push({
+          task: `Time commitment: ${match}`,
+          timeframe: 'Immediate'
+        });
+      });
+    }
+    
+    // Analyze mood from text
+    if (/good|great|excellent|ready|yes|sure|absolutely/.test(combinedText)) {
+      moodEnergy = 'positive and engaged';
+      sessionOutcome = 'productive';
+    } else if (/tired|difficult|hard|no|maybe|unsure/.test(combinedText)) {
+      moodEnergy = 'low energy or hesitant';
+      sessionOutcome = 'adjustment';
+    } else {
+      moodEnergy = 'neutral and focused';
+      sessionOutcome = conversation.length > 4 ? 'planning' : 'brief';
+    }
+  }
+  
+  // Default values if nothing extracted
+  if (keyDecisions.length === 0) {
+    keyDecisions.push('Session completed successfully');
+  }
+  
+  if (commitments.length === 0) {
+    commitments.push({
+      task: 'Morning check-in completed',
+      timeframe: 'Session duration'
+    });
+  }
+  
+  const fallbackAnalysis = {
+    key_decisions: keyDecisions,
+    commitments: commitments,
+    mood_energy: moodEnergy,
+    session_outcome: sessionOutcome
+  };
+  
+  console.log('✅ Fallback session analysis created:', fallbackAnalysis);
+  return fallbackAnalysis;
 }
 
 // Your existing tool calling function - keep as is

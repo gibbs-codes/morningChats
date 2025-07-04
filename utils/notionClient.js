@@ -49,39 +49,113 @@ class NotionClient {
   }
 
   // Log morning chat session to Notion
-  async logMorningSession(databaseId, sessionData) {
-    try {
-      const response = await fetch(`${this.baseURL}/pages`, {
-        method: 'POST',
-        headers: this.headers,
-        body: JSON.stringify({
-          parent: { database_id: databaseId },
-          properties: {
-            'Date': {
-              date: { start: new Date().toISOString().split('T')[0] }
-            },
-            'Session Summary': {
-              rich_text: [{ text: { content: sessionData.summary || 'Morning coaching session completed' } }]
-            },
-            'Key Goals': {
-              rich_text: [{ text: { content: sessionData.goals || 'Goals discussed during session' } }]
-            },
-            'Mood': {
-              select: { name: sessionData.mood || 'Neutral' }
-            },
-            'Duration': {
-              number: sessionData.duration || 0
-            }
-          }
-        })
-      });
-
-      return await response.json();
-    } catch (error) {
-      console.error('Error logging to Notion:', error);
-      return null;
+  // Enhanced logMorningSession method with better error handling and validation
+async logMorningSession(databaseId, sessionData) {
+  try {
+    console.log('📝 Preparing Notion session log...');
+    console.log('Database ID:', databaseId);
+    console.log('Session Data:', sessionData);
+    
+    // Validate required data
+    if (!databaseId) {
+      throw new Error('Database ID is required');
     }
+    
+    if (!this.apiKey) {
+      throw new Error('Notion API key is not configured');
+    }
+    
+    // Prepare the payload with safe defaults
+    const payload = {
+      parent: { database_id: databaseId },
+      properties: {
+        'Date': {
+          date: { start: new Date().toISOString().split('T')[0] }
+        },
+        'Session Summary': {
+          rich_text: [{ 
+            text: { 
+              content: sessionData.summary || 'Morning coaching session completed' 
+            } 
+          }]
+        },
+        'Key Goals': {
+          rich_text: [{ 
+            text: { 
+              content: sessionData.goals || 'Goals discussed during session' 
+            } 
+          }]
+        },
+        'Mood': {
+          select: { name: sessionData.mood || 'Neutral' }
+        },
+        'Duration': {
+          number: sessionData.duration || 0
+        }
+      }
+    };
+    
+    console.log('📤 Sending to Notion API...');
+    console.log('Payload:', JSON.stringify(payload, null, 2));
+    
+    const response = await fetch(`${this.baseURL}/pages`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify(payload)
+    });
+    
+    console.log('📥 Notion API Response Status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Notion API Error Response:', errorText);
+      throw new Error(`Notion API error: ${response.status} - ${errorText}`);
+    }
+    
+    const result = await response.json();
+    console.log('✅ Notion API Success:', result.id);
+    
+    return result;
+    
+  } catch (error) {
+    console.error('❌ Error logging to Notion:', error);
+    
+    // Log more details for debugging
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response headers:', error.response.headers);
+    }
+    
+    // Return null but don't throw - we don't want to break the session ending
+    return null;
   }
+}
+
+// Add a method to test Notion connection
+async testNotionConnection(databaseId) {
+  try {
+    console.log('🔍 Testing Notion connection...');
+    
+    const response = await fetch(`${this.baseURL}/databases/${databaseId}`, {
+      method: 'GET',
+      headers: this.headers
+    });
+    
+    if (response.ok) {
+      const dbInfo = await response.json();
+      console.log('✅ Notion connection successful:', dbInfo.title?.[0]?.text?.content || 'Database');
+      return true;
+    } else {
+      const errorText = await response.text();
+      console.error('❌ Notion connection failed:', response.status, errorText);
+      return false;
+    }
+    
+  } catch (error) {
+    console.error('❌ Notion connection test error:', error);
+    return false;
+  }
+}
 
   // Add a new task/goal - simplified, no completion needed
   async addTask(databaseId, taskData) {
