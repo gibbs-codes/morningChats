@@ -1,65 +1,93 @@
+// routes/voice.js - Updated to use pre-prepared data
 import pkg from 'twilio';
 const { twiml } = pkg;
-import { getTodayPlan } from '../utils/getTodayPlan.js';
+import { preCallManager } from '../utils/preCallPrep.js';
 import { getSession } from '../utils/sessionManager.js';
 import { ctx } from '../memory/context.js';
 import { systemPrompt } from '../prompts/systemPrompt.js';
 
 export async function handleVoice(req, res) {
   const callSid = req.body.CallSid;
+  const callerNumber = req.body.From;
+  const prepKey = req.query.prep; // From URL params when call was initiated
+  
+  console.log(`🎯 Handling voice for call ${callSid}`);
   
   try {
-    console.log('🚀 Starting enhanced morning coaching session...');
+    let preparedData = null;
     
-    // Get today's plan
-    const { events, habits } = await getTodayPlan();
+    // Try to get pre-prepared data
+    if (prepKey) {
+      preparedData = preCallManager.claimPreparedData(callerNumber, callSid);
+    }
     
-    // Create/get session manager
+    // Fallback if no prepared data (shouldn't happen in normal flow)
+    if (!preparedData) {
+      console.log('⚠️ No prepared data found, using fallback...');
+      preparedData = {
+        events: [],
+        habits: [],
+        analysis: null,
+        opener: "Morning. Let's see what needs your attention today.",
+        userContext: { pattern: 'unknown' }
+      };
+    }
+
+    // Create session manager with prepared data
     const session = getSession(callSid);
-    
-    // Feature 1: Analyze the day structure
-    const dayAnalysis = await session.analyzeTodaysPlan(habits, events);
-    
-    // Generate personalized opener based on analysis
-    const intro = session.generateOverviewMessage(dayAnalysis, habits, events);
+    session.sessionData.dayAnalysis = preparedData.analysis;
+    session.sessionData.userContext = preparedData.userContext;
+    session.sessionData.todaysPlan = {
+      events: preparedData.events,
+      habits: preparedData.habits
+    };
+
+    // Use the pre-prepared opener message
+    const opener = preparedData.opener;
     
     // Set conversation context
     ctx.set(callSid, [
       { role: 'system', content: systemPrompt },
-      { role: 'assistant', content: intro }
+      { role: 'assistant', content: opener }
     ]);
     
     // Track this interaction
-    session.addExchange('SESSION_START', intro, { 
-      dayAnalysis, 
-      taskCount: habits.length, 
-      eventCount: events.length 
+    session.addExchange('SESSION_START', opener, { 
+      hadPreparedData: !!preparedData,
+      taskCount: preparedData.habits.length, 
+      eventCount: preparedData.events.length,
+      userPattern: preparedData.userContext?.pattern
     });
     
     session.setState('overview');
     
-    console.log('✅ Session initialized with day analysis');
+    console.log('✅ Session initialized instantly with prepared data');
+    console.log(`📢 Opener: "${opener}"`);
     
     const response = new twiml.VoiceResponse();
-    response.say({ voice: 'Google.en-US-Neural2-I' }, intro);
-    response.gather({ input: 'speech', action: '/gather', speechTimeout: 'auto' });
+    response.say({ voice: 'Google.en-US-Neural2-I' }, opener);
+    response.gather({ 
+      input: 'speech', 
+      action: '/gather', 
+      speechTimeout: 'auto',
+      timeout: 5
+    });
     
     res.type('text/xml').send(response.toString());
     
   } catch (error) {
-    console.error('Voice handler error:', error);
+    console.error('❌ Voice handler error:', error);
     
-    // Fallback to basic functionality
-    const { events, habits } = await getTodayPlan();
-    const intro = `Morning. ${habits.length} tasks, ${events.length} events. What's first?`;
+    // Simple fallback
+    const opener = "Morning. Ready to tackle your day?";
     
     ctx.set(callSid, [
       { role: 'system', content: systemPrompt },
-      { role: 'assistant', content: intro }
+      { role: 'assistant', content: opener }
     ]);
     
     const response = new twiml.VoiceResponse();
-    response.say({ voice: 'Google.en-US-Neural2-I' }, intro);
+    response.say({ voice: 'Google.en-US-Neural2-I' }, opener);
     response.gather({ input: 'speech', action: '/gather', speechTimeout: 'auto' });
     
     res.type('text/xml').send(response.toString());
