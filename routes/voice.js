@@ -1,10 +1,11 @@
-// Enhanced voice.js with better call handling
+// Enhanced voice.js with missed call accountability
 import pkg from 'twilio';
 const { twiml } = pkg;
 import { getTodayPlan } from '../utils/getTodayPlan.js';
 import { getSession, endSession } from '../utils/sessionManager.js';
 import { ctx } from '../memory/context.js';
 import { systemPrompt } from '../prompts/systemPrompt.js';
+import { notionClient } from '../utils/notionClient.js';
 
 export async function handleVoice(req, res) {
   const callSid = req.body.CallSid;
@@ -32,8 +33,8 @@ export async function handleVoice(req, res) {
     // Store the plan data in session for later use
     session.sessionData.todaysPlan = { events, habits };
     
-    // Generate a simple, informative opener
-    const opener = generateSimpleOpener(habits, events);
+    // Generate a DOMINANT opener with more bite
+    const opener = generateDominantOpener(habits, events);
     
     // Set conversation context
     ctx.set(callSid, [
@@ -49,7 +50,7 @@ export async function handleVoice(req, res) {
     
     session.setState('overview');
     
-    console.log(`✅ Session initialized with opener: "${opener}"`);
+    console.log(`✅ Session initialized with DOMINANT opener: "${opener}"`);
     
     const response = new twiml.VoiceResponse();
     response.say({ voice: 'Google.en-US-Neural2-I' }, opener);
@@ -62,8 +63,8 @@ export async function handleVoice(req, res) {
       hints: 'DTT, office attendance, yes, no, done, fifteen minutes' // Help speech recognition
     });
     
-    // Add a fallback for no response
-    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Still there? What do you want to tackle first?');
+    // Add a MORE DOMINANT fallback for no response
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Still there? Stop wasting time. What are you doing first?');
     response.gather({ 
       input: 'speech', 
       action: '/gather', 
@@ -71,8 +72,8 @@ export async function handleVoice(req, res) {
       timeout: 5
     });
     
-    // Final fallback - end call if no response
-    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Talk to you tomorrow. Stay focused.');
+    // Final DOMINANT fallback - end call with accountability
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Not responding counts as avoidance. Call me back when you are ready to work.');
     response.hangup();
     
     res.type('text/xml').send(response.toString());
@@ -80,8 +81,8 @@ export async function handleVoice(req, res) {
   } catch (error) {
     console.error('❌ Voice handler error:', error);
     
-    // Simple fallback
-    const opener = "Morning. Ready to tackle your day?";
+    // DOMINANT fallback
+    const opener = "Morning. Time to work. What's first?";
     
     ctx.set(callSid, [
       { role: 'system', content: systemPrompt },
@@ -98,18 +99,22 @@ export async function handleVoice(req, res) {
       finishOnKey: '#'
     });
     
-    // Fallback hangup
-    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Talk tomorrow.');
+    // Dominant hangup
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Call back when ready.');
     response.hangup();
     
     res.type('text/xml').send(response.toString());
   }
 }
 
-function generateSimpleOpener(habits, events) {
+function generateDominantOpener(habits, events) {
   const hour = new Date().getHours();
-  const greeting = hour < 8 ? "Early start today." : 
-                  hour < 10 ? "Morning." : "Getting going.";
+  
+  // MORE DOMINANT time-based greetings
+  const greeting = hour < 7 ? "Early. Good." : 
+                  hour < 8 ? "On time. Let's work." :
+                  hour < 9 ? "Morning." : 
+                  hour < 10 ? "Getting late." : "Already behind schedule.";
   
   // Get upcoming events in next few hours
   const now = new Date();
@@ -124,17 +129,19 @@ function generateSimpleOpener(habits, events) {
   
   let details = [];
   
-  // Add urgent events
+  // Add urgent events with PRESSURE
   if (soonEvents.length > 0) {
     const nextEvent = soonEvents[0];
     const minutesUntil = Math.floor((new Date(nextEvent.start) - now) / 60000);
     
-    if (minutesUntil < 90) {
-      details.push(`${nextEvent.title} in ${minutesUntil} minutes`);
+    if (minutesUntil < 60) {
+      details.push(`${nextEvent.title} in ${minutesUntil} minutes. Prep time.`);
+    } else if (minutesUntil < 90) {
+      details.push(`${nextEvent.title} soon. Ready?`);
     }
   }
   
-  // Add habits by name
+  // Add habits with COMMANDING tone
   if (topHabits.length > 0) {
     const habitNames = topHabits.map(h => {
       const text = h.text || h.title || 'Task';
@@ -142,32 +149,48 @@ function generateSimpleOpener(habits, events) {
     });
     
     if (habitNames.length === 1) {
-      details.push(`${habitNames[0]} to do`);
+      details.push(`${habitNames[0]} needs doing.`);
     } else {
-      details.push(`${habitNames[0]} and ${habitNames[1]} to do`);
+      details.push(`${habitNames[0]} and ${habitNames[1]} waiting.`);
     }
   }
   
-  // Build the opener
+  // Build DOMINANT opener
   if (details.length === 0) {
-    return `${greeting} What's your main focus today?`;
+    return `${greeting} No excuses today. What's your focus?`;
   }
   
   if (details.length === 1) {
-    return `${greeting} ${details[0]}. Ready?`;
+    return `${greeting} ${details[0]} Start now or explain why not.`;
   }
   
-  return `${greeting} ${details.join(', ')}. What's first?`;
+  return `${greeting} ${details.join(' ')} Pick one and commit.`;
 }
 
-// Add this route to handle status callbacks from Twilio
+// Enhanced status callback with MISSED CALL ACCOUNTABILITY
 export async function handleStatus(req, res) {
   const callSid = req.body.CallSid;
   const callStatus = req.body.CallStatus;
+  const phoneNumber = req.body.To; // Get the phone number for logging
   
   console.log(`📊 Call status update: ${callSid} -> ${callStatus}`);
   
-  if (callStatus === 'completed' || callStatus === 'no-answer' || callStatus === 'failed') {
+  // Log missed calls for ACCOUNTABILITY
+  if (callStatus === 'no-answer' || callStatus === 'failed' || callStatus === 'canceled') {
+    console.log(`🚨 MISSED CALL DETECTED: ${callStatus}`);
+    
+    // Log to Notion for accountability tracking
+    if (process.env.NOTION_LOGS_DB_ID) {
+      await notionClient.logMissedCall(process.env.NOTION_LOGS_DB_ID, phoneNumber, callStatus);
+      console.log('📝 Missed call logged to Notion for accountability');
+    }
+    
+    // Clean up any session that might have been created
+    await endSession(callSid);
+    ctx.clear(callSid);
+  }
+  
+  if (callStatus === 'completed') {
     console.log(`🧹 Cleaning up completed call: ${callSid}`);
     await endSession(callSid);
     ctx.clear(callSid);

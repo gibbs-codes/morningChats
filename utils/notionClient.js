@@ -80,6 +80,125 @@ class NotionClient {
     }
   }
 
+  // Log missed call for accountability tracking
+  async logMissedCall(databaseId, phoneNumber, reason = 'no-answer') {
+    try {
+      console.log('📞💥 Logging missed call for accountability...');
+      
+      if (!databaseId || !this.apiKey) {
+        throw new Error('Database ID or API key missing');
+      }
+      
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0];
+      const timeStr = now.toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false 
+      });
+      
+      // Create a missed call entry with ACCOUNTABILITY ENERGY
+      const payload = {
+        parent: { database_id: databaseId },
+        properties: {
+          "Date": {
+            title: [{ 
+              text: { 
+                content: `${dateStr} - ${timeStr} MISSED CHECK-IN`
+              } 
+            }]
+          },
+          "Priorities": {
+            rich_text: [{ 
+              text: { 
+                content: "ACCOUNTABILITY FAILURE - No check-in completed"
+              } 
+            }]
+          },
+          "Mood": {
+            rich_text: [{ 
+              text: { 
+                content: "Avoidance"
+              } 
+            }]
+          },
+          "Energy Level": {
+            rich_text: [{ 
+              text: { 
+                content: "Unknown - Didn't Show"
+              } 
+            }]
+          },
+          "Notes": {
+            rich_text: [{ 
+              text: { 
+                content: `MISSED CALL: ${this.getMissedCallReason(reason)}. No accountability check completed. This is a pattern that needs addressing.`
+              } 
+            }]
+          },
+          "Session Type": {
+            select: { 
+              name: "Quick Check-in"
+            }
+          },
+          "Duration": {
+            number: 0
+          },
+          "Commitments Made": {
+            rich_text: [{ 
+              text: { 
+                content: "NONE - Avoided accountability call"
+              } 
+            }]
+          },
+          "Key Decisions": {
+            rich_text: [{ 
+              text: { 
+                content: `DECISION: Chose to avoid morning accountability. Reason: ${reason}. This counts as a missed commitment.`
+              } 
+            }]
+          }
+        }
+      };
+      
+      console.log('📤 Logging missed call to Notion...');
+      
+      const response = await fetch(`${this.baseURL}/pages`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify(payload)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Failed to log missed call:', errorText);
+        return null;
+      }
+      
+      const result = await response.json();
+      console.log('✅ Missed call logged for accountability:', result.id);
+      
+      return result;
+      
+    } catch (error) {
+      console.error('❌ Error logging missed call:', error);
+      return null;
+    }
+  }
+
+  // Helper: Get reason for missed call with ACCOUNTABILITY LANGUAGE
+  getMissedCallReason(reason) {
+    const reasons = {
+      'no-answer': 'Phone rang but you chose not to answer. Classic avoidance behavior.',
+      'busy': 'Line was busy - were you avoiding the call or actually unavailable?',
+      'failed': 'Call failed to connect - technical issue or excuse?',
+      'canceled': 'Call was canceled - you actively chose to avoid accountability.',
+      'timeout': 'No answer within timeout period - you saw it ring and ignored it.'
+    };
+    
+    return reasons[reason] || `Unknown reason: ${reason}. Still counts as avoidance.`;
+  }
+
   // FIXED: Log morning session matching your exact schema
   async logMorningSession(databaseId, sessionData) {
     try {
@@ -152,12 +271,39 @@ class NotionClient {
                 content: this.generateComprehensiveNotes(sessionData)
               } 
             }]
+          },
+          
+          // NEW FIELDS - Session Type as select
+          "Session Type": {
+            select: { 
+              name: this.determineSessionType(sessionData)
+            }
+          },
+          
+          // Duration as number (minutes)
+          "Duration": {
+            number: sessionData.duration || 0
+          },
+          
+          // Commitments Made as text
+          "Commitments Made": {
+            rich_text: [{ 
+              text: { 
+                content: this.extractCommitments(sessionData)
+              } 
+            }]
+          },
+          
+          // Key Decisions as text
+          "Key Decisions": {
+            rich_text: [{ 
+              text: { 
+                content: this.extractKeyDecisions(sessionData)
+              } 
+            }]
           }
         }
       };
-
-      // Add optional fields if you've added them to your database
-      // (These won't cause errors if the fields don't exist)
       
       console.log('📤 Sending to Notion API...');
       console.log('Payload:', JSON.stringify(payload, null, 2));
@@ -246,7 +392,108 @@ class NotionClient {
     }
   }
 
-  // Helper: Generate comprehensive notes
+  // Helper: Determine session type based on content
+  determineSessionType(sessionData) {
+    const summary = (sessionData.summary || '').toLowerCase();
+    const goals = (sessionData.goals || '').toLowerCase();
+    const combinedText = `${summary} ${goals}`;
+    
+    // Look for planning keywords
+    if (combinedText.includes('planning') || combinedText.includes('schedule') || combinedText.includes('organize')) {
+      return 'Planning Session';
+    }
+    
+    // Look for problem-solving keywords
+    if (combinedText.includes('problem') || combinedText.includes('difficult') || combinedText.includes('struggle') || combinedText.includes('issue')) {
+      return 'Problem Solving';
+    }
+    
+    // Look for goal-setting keywords
+    if (combinedText.includes('goal') || combinedText.includes('target') || combinedText.includes('commit') || combinedText.includes('focus')) {
+      return 'Goal Setting';
+    }
+    
+    // Default to quick check-in for brief sessions
+    if (sessionData.duration && sessionData.duration < 3) {
+      return 'Quick Check-in';
+    }
+    
+    // Default case
+    return 'Quick Check-in';
+  }
+
+  // Helper: Extract specific commitments made
+  extractCommitments(sessionData) {
+    const commitments = [];
+    
+    // Extract from sessionData.goals if it contains specific commitments
+    if (sessionData.goals && sessionData.goals !== 'No specific goals set' && sessionData.goals !== 'Morning check-in completed') {
+      commitments.push(sessionData.goals);
+    }
+    
+    // Look for time commitments in the summary
+    const summary = sessionData.summary || '';
+    const timeCommitments = summary.match(/(\d+)\s*(minutes?|mins?|hours?|hrs?)/gi);
+    if (timeCommitments) {
+      timeCommitments.forEach(commitment => {
+        commitments.push(`Time commitment: ${commitment}`);
+      });
+    }
+    
+    // Look for action words that indicate commitments
+    const actionMatches = summary.match(/\b(will|going to|plan to|start with|focus on)\s+([^.!?]*)/gi);
+    if (actionMatches) {
+      actionMatches.slice(0, 2).forEach(match => {
+        commitments.push(match.trim());
+      });
+    }
+    
+    // Default if no specific commitments found
+    if (commitments.length === 0) {
+      return 'Completed morning check-in and planning';
+    }
+    
+    return [...new Set(commitments)].join(' | '); // Remove duplicates and join
+  }
+
+  // Helper: Extract key decisions made during session
+  extractKeyDecisions(sessionData) {
+    const decisions = [];
+    
+    // Extract from summary if it contains decision language
+    const summary = sessionData.summary || '';
+    const decisionWords = ['decided', 'choosing', 'prioritizing', 'focusing on', 'starting with'];
+    
+    decisionWords.forEach(word => {
+      if (summary.toLowerCase().includes(word)) {
+        const regex = new RegExp(`${word}\\s+([^.!?]*)`,'gi');
+        const matches = summary.match(regex);
+        if (matches) {
+          decisions.push(...matches.slice(0, 2));
+        }
+      }
+    });
+    
+    // Look for specific task prioritization
+    if (summary.includes('DTT') || summary.includes('Office Attendance')) {
+      decisions.push('Prioritized daily tasks: DTT and Office Attendance');
+    }
+    
+    // Look for time allocation decisions
+    const timeDecisions = summary.match(/(\w+)\s+for\s+(\d+)\s*(minutes?|mins?|hours?)/gi);
+    if (timeDecisions) {
+      timeDecisions.forEach(decision => {
+        decisions.push(`Time allocation: ${decision}`);
+      });
+    }
+    
+    // Default if no decisions detected
+    if (decisions.length === 0) {
+      return 'Engaged in morning planning and task organization';
+    }
+    
+    return [...new Set(decisions)].join(' | '); // Remove duplicates and join
+  }
   generateComprehensiveNotes(sessionData) {
     const notes = [];
     
