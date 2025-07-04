@@ -1,3 +1,4 @@
+// Enhanced gather.js with better session ending
 import pkg from 'twilio';
 const { twiml } = pkg;
 import { ctx } from '../memory/context.js';
@@ -15,21 +16,17 @@ export async function handleGather(req, res) {
 
   const response = new twiml.VoiceResponse();
 
-  // Check for session end
-  if (/^(no|nothing else|that'?s it|i'?m done|all set|wrap up|finished)$/i.test(userInput)) {
+  // Enhanced session ending detection
+  if (isSessionEnding(userInput)) {
     console.log('🏁 User ending session...');
-    
-    // Enhanced session ending with analysis
-    const sessionData = await endSession(callSid);
-    
-    const endMessage = sessionData ? 
-      'Session logged. Go execute. Check in tomorrow.' :
-      'Great work today! Talk to you tomorrow. Keep it up!';
-    
-    response.say({ voice: 'Google.en-US-Neural2-I' }, endMessage);
-    response.hangup();
+    return await handleSessionEnd(callSid, userInput, response, res);
+  }
 
-    return res.type('text/xml').send(response.toString());
+  // Check for Twilio call hangup
+  if (req.body.CallStatus === 'completed' || req.body.CallStatus === 'no-answer') {
+    console.log('📞 Call ended by Twilio status');
+    await endSession(callSid);
+    return res.status(200).send(); // Just acknowledge, no TwiML needed
   }
 
   try {
@@ -112,7 +109,13 @@ export async function handleGather(req, res) {
     console.log(`🤖 Assistant reply: "${assistantReply}"`);
 
     response.say({ voice: 'Google.en-US-Neural2-I' }, assistantReply);
-    response.gather({ input: 'speech', action: '/gather', speechTimeout: 'auto' });
+    response.gather({ 
+      input: 'speech', 
+      action: '/gather', 
+      speechTimeout: 'auto',
+      timeout: 8, // 8 second timeout for responsiveness
+      finishOnKey: '#' // Allow # to end call
+    });
 
     res.type('text/xml').send(response.toString());
 
@@ -127,6 +130,191 @@ export async function handleGather(req, res) {
 
     res.type('text/xml').send(response.toString());
   }
+}
+
+// Better session ending detection
+function isSessionEnding(userInput) {
+  const endPhrases = [
+    /^(no|nothing else|that'?s it|i'?m done|all set|wrap up|finished|bye|goodbye)$/i,
+    /^(good|ok|sounds good|alright|perfect)\s*(bye|goodbye|thanks)?$/i,
+    /^(thanks|thank you|appreciate it)\s*(bye|goodbye)?$/i,
+    /end call|hang up|gotta go|have to go/i,
+    /see you tomorrow|talk tomorrow|tomorrow/i
+  ];
+  
+  return endPhrases.some(pattern => pattern.test(userInput.trim()));
+}
+
+// Enhanced session ending
+async function handleSessionEnd(callSid, userInput, response, res) {
+  try {
+    console.log('🏁 Processing session end...');
+    
+    // Get the session data before ending it
+    const session = getSession(callSid);
+    const conversationHistory = ctx.get(callSid) || [];
+    
+    // Extract session insights for Notion
+    const sessionInsights = extractSessionInsights(conversationHistory, session);
+    
+    // End the session (this saves to MongoDB)
+    const sessionData = await endSession(callSid);
+    
+    // Save to your Notion "Morning Check In" database
+    if (process.env.NOTION_CHECKIN_DB_ID) {
+      await saveToNotionCheckIn(sessionInsights);
+    }
+    
+    // Clean up context
+    ctx.clear(callSid);
+    
+    // Final response
+    const endMessage = getEndingMessage(sessionInsights);
+    
+    response.say({ voice: 'Google.en-US-Neural2-I' }, endMessage);
+    response.hangup();
+    
+    console.log('✅ Session ended and logged successfully');
+    return res.type('text/xml').send(response.toString());
+    
+  } catch (error) {
+    console.error('❌ Error ending session:', error);
+    
+    // Fallback ending
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Session complete. Talk tomorrow!');
+    response.hangup();
+    return res.type('text/xml').send(response.toString());
+  }
+}
+
+// Extract insights for your Notion database
+function extractSessionInsights(conversationHistory, session) {
+  const insights = {
+    date: new Date().toISOString().split('T')[0],
+    priorities: [],
+    mood: 'Neutral',
+    energyLevel: 'Medium',
+    notes: ''
+  };
+  
+  // Extract priorities from conversation
+  const userMessages = conversationHistory
+    .filter(msg => msg.role === 'user')
+    .map(msg => msg.content);
+  
+  // Look for task mentions and commitments
+  const taskMentions = [];
+  userMessages.forEach(msg => {
+    // Look for specific task names from their habits
+    if (session.sessionData.todaysPlan?.habits) {
+      session.sessionData.todaysPlan.habits.forEach(habit => {
+        if (msg.toLowerCase().includes(habit.text.toLowerCase().split(' ')[0])) {
+          taskMentions.push(habit.text);
+        }
+      });
+    }
+    
+    // Look for time commitments
+    if (/\b(\d+)\s*(minutes?|mins?|hours?|hrs?)\b/i.test(msg)) {
+      const timeMatch = msg.match(/\b(\d+)\s*(minutes?|mins?|hours?|hrs?)\b/i);
+      if (timeMatch) {
+        taskMentions.push(`${timeMatch[0]} commitment made`);
+      }
+    }
+  });
+  
+  insights.priorities = [...new Set(taskMentions)].slice(0, 3); // Top 3 unique priorities
+  
+  // Analyze mood from conversation tone
+  const combinedText = userMessages.join(' ').toLowerCase();
+  if (/good|great|excellent|awesome|ready|excited|energized/.test(combinedText)) {
+    insights.mood = 'Positive';
+    insights.energyLevel = 'High';
+  } else if (/tired|slow|difficult|hard|struggle|overwhelmed/.test(combinedText)) {
+    insights.mood = 'Low';
+    insights.energyLevel = 'Low';
+  } else if (/ok|fine|decent|normal|alright/.test(combinedText)) {
+    insights.mood = 'Neutral';
+    insights.energyLevel = 'Medium';
+  }
+  
+  // Create notes summary
+  const commitments = session.sessionData.decisions || [];
+  const keyPoints = [];
+  
+  if (commitments.length > 0) {
+    keyPoints.push(`Made ${commitments.length} commitments`);
+  }
+  
+  if (insights.priorities.length > 0) {
+    keyPoints.push(`Focus: ${insights.priorities[0]}`);
+  }
+  
+  insights.notes = keyPoints.join('. ') || 'Brief check-in completed';
+  
+  return insights;
+}
+
+// Save to your Notion Morning Check In database
+async function saveToNotionCheckIn(insights) {
+  try {
+    console.log('💾 Saving to Notion Check-In database...');
+    
+    const response = await fetch(`https://api.notion.com/v1/pages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.NOTION_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Notion-Version': '2022-06-28'
+      },
+      body: JSON.stringify({
+        parent: { database_id: process.env.NOTION_CHECKIN_DB_ID },
+        properties: {
+          'Date': {
+            date: { start: insights.date }
+          },
+          'Priorities': {
+            multi_select: insights.priorities.map(priority => ({ name: priority }))
+          },
+          'Mood': {
+            select: { name: insights.mood }
+          },
+          'Energy Level': {
+            select: { name: insights.energyLevel }
+          },
+          'Notes': {
+            rich_text: [{ text: { content: insights.notes } }]
+          }
+        }
+      })
+    });
+    
+    if (response.ok) {
+      console.log('✅ Successfully saved to Notion Check-In database');
+    } else {
+      console.error('❌ Failed to save to Notion:', await response.text());
+    }
+    
+  } catch (error) {
+    console.error('❌ Error saving to Notion Check-In:', error);
+  }
+}
+
+// Get appropriate ending message based on session
+function getEndingMessage(insights) {
+  const messages = [
+    'Good session. Execute those plans.',
+    'Solid check-in. Make it happen.',
+    'Plans set. Time to work.',
+    'Clear priorities. Go execute.',
+    'Session logged. Get after it.'
+  ];
+  
+  if (insights.priorities.length > 0) {
+    return `${insights.priorities[0]} locked in. Execute.`;
+  }
+  
+  return messages[Math.floor(Math.random() * messages.length)];
 }
 
 async function executeToolCall(toolCall) {

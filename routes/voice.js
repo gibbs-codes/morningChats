@@ -1,14 +1,24 @@
+// Enhanced voice.js with better call handling
 import pkg from 'twilio';
 const { twiml } = pkg;
 import { getTodayPlan } from '../utils/getTodayPlan.js';
-import { getSession } from '../utils/sessionManager.js';
+import { getSession, endSession } from '../utils/sessionManager.js';
 import { ctx } from '../memory/context.js';
 import { systemPrompt } from '../prompts/systemPrompt.js';
 
 export async function handleVoice(req, res) {
   const callSid = req.body.CallSid;
+  const callStatus = req.body.CallStatus;
   
-  console.log(`🎯 Handling voice for call ${callSid}`);
+  console.log(`🎯 Handling voice for call ${callSid}, status: ${callStatus}`);
+  
+  // Handle call completion/hangup
+  if (callStatus === 'completed' || callStatus === 'no-answer' || callStatus === 'failed') {
+    console.log(`📞 Call ${callStatus}, cleaning up session...`);
+    await endSession(callSid);
+    ctx.clear(callSid);
+    return res.status(200).send(); // Just acknowledge, no TwiML needed
+  }
   
   try {
     // Get today's plan (this should be fast now)
@@ -47,8 +57,23 @@ export async function handleVoice(req, res) {
       input: 'speech', 
       action: '/gather', 
       speechTimeout: 'auto',
+      timeout: 8, // 8 second timeout
+      finishOnKey: '#', // Allow # to end call
+      hints: 'DTT, office attendance, yes, no, done, fifteen minutes' // Help speech recognition
+    });
+    
+    // Add a fallback for no response
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Still there? What do you want to tackle first?');
+    response.gather({ 
+      input: 'speech', 
+      action: '/gather', 
+      speechTimeout: 'auto',
       timeout: 5
     });
+    
+    // Final fallback - end call if no response
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Talk to you tomorrow. Stay focused.');
+    response.hangup();
     
     res.type('text/xml').send(response.toString());
     
@@ -65,7 +90,17 @@ export async function handleVoice(req, res) {
     
     const response = new twiml.VoiceResponse();
     response.say({ voice: 'Google.en-US-Neural2-I' }, opener);
-    response.gather({ input: 'speech', action: '/gather', speechTimeout: 'auto' });
+    response.gather({ 
+      input: 'speech', 
+      action: '/gather', 
+      speechTimeout: 'auto',
+      timeout: 8,
+      finishOnKey: '#'
+    });
+    
+    // Fallback hangup
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Talk tomorrow.');
+    response.hangup();
     
     res.type('text/xml').send(response.toString());
   }
@@ -123,4 +158,20 @@ function generateSimpleOpener(habits, events) {
   }
   
   return `${greeting} ${details.join(', ')}. What's first?`;
+}
+
+// Add this route to handle status callbacks from Twilio
+export async function handleStatus(req, res) {
+  const callSid = req.body.CallSid;
+  const callStatus = req.body.CallStatus;
+  
+  console.log(`📊 Call status update: ${callSid} -> ${callStatus}`);
+  
+  if (callStatus === 'completed' || callStatus === 'no-answer' || callStatus === 'failed') {
+    console.log(`🧹 Cleaning up completed call: ${callSid}`);
+    await endSession(callSid);
+    ctx.clear(callSid);
+  }
+  
+  res.status(200).send('OK');
 }

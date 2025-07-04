@@ -1,4 +1,6 @@
 import fetch from 'node-fetch';
+import { analyzeDayStructure } from './llmReply.js'; // Add the missing import
+import { formatTime } from './formatTime.js';
 
 export async function getTodayPlan() {
   console.log('📋 Fetching today\'s plan from Habitica and calendar...');
@@ -63,13 +65,22 @@ export async function getTodayPlanWithAnalysis() {
       };
     }
 
-    // Analyze with LLM
-    const analysis = await analyzeDayStructure(habits, events);
+    // Only analyze if we have substantial data
+    let analysis = null;
+    if (habits.length > 0 || events.length > 0) {
+      try {
+        analysis = await analyzeDayStructure(habits, events);
+        console.log('✅ Day analysis complete:', analysis);
+      } catch (analysisError) {
+        console.log('⚠️ Analysis failed, using fallback:', analysisError.message);
+        analysis = null;
+      }
+    }
     
     // Generate informed opener
     const opener = generateInformedOpener(habits, events, analysis);
     
-    console.log('✅ Analysis complete with opener ready');
+    console.log('✅ Plan with analysis complete');
     
     return {
       events,
@@ -131,9 +142,9 @@ function generateInformedOpener(habits, events, analysis) {
     });
     
     if (habitNames.length === 1) {
-      details.push(`${habitNames[0]} on your list`);
+      details.push(`${habitNames[0]} to do`);
     } else {
-      details.push(`${habitNames[0]} and ${habitNames[1]} on your list`);
+      details.push(`${habitNames[0]} and ${habitNames[1]} to do`);
     }
   }
   
@@ -143,20 +154,9 @@ function generateInformedOpener(habits, events, analysis) {
   }
   
   if (details.length === 1) {
-    return `${greeting} ${details[0]}. Ready to start?`;
+    return `${greeting} ${details[0]}. Ready?`;
   }
   
   // Multiple items
   return `${greeting} ${details.join(', ')}. What's first?`;
 }
-
-// Example openers this would generate:
-/*
-"Morning. Team standup in 30 minutes, Morning workout and Review quarterly goals on your list. What's first?"
-
-"Early start today. Morning workout on your list. Ready to start?"
-
-"Getting started. Client presentation at 2 PM, Email review and Budget planning on your list. What's first?"
-
-"Morning. Quiet day scheduled. What's your main focus?"
-*/
