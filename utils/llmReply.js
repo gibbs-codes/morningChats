@@ -23,7 +23,7 @@ function createLLMProvider() {
 
 const llm = createLLMProvider();
 
-// Day analysis parser
+// Day analysis parser with better error handling
 const dayAnalysisParser = StructuredOutputParser.fromZodSchema(
   z.object({
     priority_items: z.array(z.string()).describe("Top 3 priority items for the day"),
@@ -64,19 +64,23 @@ export async function llmReply(history) {
   }
 }
 
-// Enhanced function for day analysis
+// Enhanced function for day analysis with better JSON extraction
 export async function analyzeDayStructure(tasks, events, context = '') {
   try {
+    console.log('🧠 Starting day analysis...');
+    
     const prompt = PromptTemplate.fromTemplate(`
-You are analyzing someone's daily schedule. Be direct and practical.
+You are analyzing someone's daily schedule. Return ONLY valid JSON with no additional text.
 
 TASKS: {tasks}
 EVENTS: {events}
 CONTEXT: {context}
 
-Analyze this day and provide structured insights:
+Return this exact JSON structure with no explanation or markdown:
 
 {format_instructions}
+
+IMPORTANT: Return ONLY the JSON object, no additional text or explanation.
 `);
     
     const formattedPrompt = await prompt.format({
@@ -86,23 +90,93 @@ Analyze this day and provide structured insights:
       format_instructions: dayAnalysisParser.getFormatInstructions()
     });
     
+    console.log('📝 Sending prompt to LLM...');
     const response = await llm.invoke(formattedPrompt);
-    return await dayAnalysisParser.parse(response.content);
+    console.log('🔄 Raw LLM response:', response.content);
+    
+    // Try to extract JSON from the response
+    let jsonContent = response.content.trim();
+    
+    // Remove any markdown code blocks
+    jsonContent = jsonContent.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+    
+    // Try to find JSON object in the response
+    const jsonMatch = jsonContent.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonContent = jsonMatch[0];
+    }
+    
+    console.log('🔧 Cleaned JSON:', jsonContent);
+    
+    // Manual JSON parsing with fallback
+    try {
+      const parsed = JSON.parse(jsonContent);
+      console.log('✅ Successfully parsed JSON:', parsed);
+      return parsed;
+    } catch (parseError) {
+      console.log('❌ JSON parse failed, trying structured parser...');
+      return await dayAnalysisParser.parse(response.content);
+    }
     
   } catch (error) {
     console.error('Day analysis error:', error);
-    return {
-      priority_items: ['Focus on your most important task'],
-      time_conflicts: [],
-      energy_assessment: 'moderate',
-      focus_recommendation: 'Start with your highest priority item'
-    };
+    
+    // Fallback: Create analysis based on the data we have
+    const fallbackAnalysis = createFallbackAnalysis(tasks, events);
+    console.log('🔄 Using fallback analysis:', fallbackAnalysis);
+    return fallbackAnalysis;
   }
+}
+
+// Create a simple fallback analysis when LLM fails
+function createFallbackAnalysis(tasks, events) {
+  const priorityItems = [];
+  const timeConflicts = [];
+  
+  // Extract task names for priorities
+  if (tasks && tasks.length > 0) {
+    priorityItems.push(...tasks.slice(0, 3).map(t => t.text || t.title || 'Unknown task'));
+  }
+  
+  // Check for time conflicts in events
+  if (events && events.length > 1) {
+    // Simple conflict detection
+    const sortedEvents = events.sort((a, b) => new Date(a.start) - new Date(b.start));
+    for (let i = 0; i < sortedEvents.length - 1; i++) {
+      const current = sortedEvents[i];
+      const next = sortedEvents[i + 1];
+      const currentEnd = new Date(current.end || current.start);
+      const nextStart = new Date(next.start);
+      
+      if (currentEnd > nextStart) {
+        timeConflicts.push(`${current.title} overlaps with ${next.title}`);
+      }
+    }
+  }
+  
+  // Default values if nothing found
+  if (priorityItems.length === 0) {
+    priorityItems.push('Focus on your most important task');
+  }
+  
+  const energyAssessment = tasks.length > 5 ? 'heavy' : tasks.length > 2 ? 'moderate' : 'light';
+  const focusRecommendation = priorityItems.length > 0 ? 
+    `Start with: ${priorityItems[0]}` : 
+    'Begin with your highest priority item';
+  
+  return {
+    priority_items: priorityItems,
+    time_conflicts: timeConflicts,
+    energy_assessment: energyAssessment,
+    focus_recommendation: focusRecommendation
+  };
 }
 
 // Enhanced function for conversation flow
 export async function generateConversationalResponse(conversation, dayAnalysis) {
   try {
+    console.log('🗨️ Generating contextual response...');
+    
     const prompt = PromptTemplate.fromTemplate(`
 You are a direct morning coach. Based on the day analysis, respond naturally.
 

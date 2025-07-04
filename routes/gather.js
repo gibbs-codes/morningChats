@@ -11,7 +11,9 @@ export async function handleGather(req, res) {
   const callSid = req.body.CallSid;
   const userInput = (req.body.SpeechResult || '').trim();
 
-  const response = new twitml.VoiceResponse();
+  console.log(`🎤 User said: "${userInput}"`);
+
+  const response = new twiml.VoiceResponse();
 
   // Check for session end
   if (/^(no|nothing else|that'?s it|i'?m done|all set|wrap up|finished)$/i.test(userInput)) {
@@ -64,12 +66,18 @@ export async function handleGather(req, res) {
       // Feature 2: Use enhanced conversational response if we have day analysis
       if (session.sessionData.dayAnalysis) {
         console.log('🧠 Generating contextual response...');
-        assistantReply = await generateConversationalResponse(
-          session.sessionData.conversation,
-          session.sessionData.dayAnalysis
-        );
+        try {
+          assistantReply = await generateConversationalResponse(
+            session.sessionData.conversation,
+            session.sessionData.dayAnalysis
+          );
+        } catch (error) {
+          console.error('Contextual response failed, using basic LLM:', error);
+          assistantReply = await llmReply(history);
+        }
       } else {
         // Fallback to basic LLM
+        console.log('📝 Using basic LLM response...');
         assistantReply = await llmReply(history);
       }
     }
@@ -101,13 +109,15 @@ export async function handleGather(req, res) {
       source: 'morningCoach'
     });
 
+    console.log(`🤖 Assistant reply: "${assistantReply}"`);
+
     response.say({ voice: 'Google.en-US-Neural2-I' }, assistantReply);
     response.gather({ input: 'speech', action: '/gather', speechTimeout: 'auto' });
 
     res.type('text/xml').send(response.toString());
 
   } catch (error) {
-    console.error('Gather handler error:', error);
+    console.error('❌ Gather handler error:', error);
     
     // Fallback response
     const fallbackReply = "Let's stay focused. What's your main priority?";

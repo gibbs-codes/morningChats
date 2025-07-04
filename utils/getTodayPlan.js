@@ -1,18 +1,22 @@
 import fetch from 'node-fetch';
-import { analyzeDayStructure } from './llmReply.js';
-import { formatTime } from './formatTime.js';
 
 export async function getTodayPlan() {
   console.log('📋 Fetching today\'s plan from Habitica and calendar...');
   
   try {
     const [eventsRes, habitsRes] = await Promise.all([
-      fetch(process.env.EVENTS_ENDPOINT),
+      fetch(process.env.EVENTS_ENDPOINT).catch(err => {
+        console.log('⚠️ Events fetch failed:', err.message);
+        return { json: () => [] };
+      }),
       fetch('https://habitica.com/api/v3/tasks/user?type=dailys', {
         headers: {
           'x-api-user': process.env.HABITICA_USER_ID,
           'x-api-key': process.env.HABITICA_API_TOKEN
         }
+      }).catch(err => {
+        console.log('⚠️ Habitica fetch failed:', err.message);
+        return { json: () => ({ data: [] }) };
       })
     ]);
 
@@ -20,8 +24,8 @@ export async function getTodayPlan() {
     console.log('📅 Fetched events:', events?.length || 0);
     
     const habitsData = await habitsRes.json();
-    const habits = habitsData.data
-      .filter(task => !task.completed && task.isDue)
+    const habits = (habitsData.data || [])
+      .filter(task => !task.completed && task.isDue !== false)
       .map(task => ({
         id: task.id,
         text: task.text,
@@ -32,7 +36,11 @@ export async function getTodayPlan() {
     
     console.log('✅ Fetched habits:', habits?.length || 0);
 
-    return { events: events || [], habits };
+    return { 
+      events: Array.isArray(events) ? events : [], 
+      habits: Array.isArray(habits) ? habits : [] 
+    };
+    
   } catch (error) {
     console.error('❌ Error fetching today\'s plan:', error);
     return { events: [], habits: [] };
