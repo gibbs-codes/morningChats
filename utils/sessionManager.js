@@ -10,8 +10,18 @@ export class SessionManager {
       conversation: [],
       decisions: [],
       dayAnalysis: null,
-      state: 'initial' // initial -> overview -> flow -> execution -> wrap
+      state: 'initial', // initial -> overview -> flow -> execution -> wrap -> ended
+      isVoicemail: false, // NEW: Track if this was voicemail
+      sessionType: 'unknown' // NEW: Track session type early
     };
+  }
+  
+  // NEW: Mark session as voicemail early
+  markAsVoicemail() {
+    console.log('🤖 Marking session as voicemail');
+    this.sessionData.isVoicemail = true;
+    this.sessionData.sessionType = 'voicemail';
+    this.sessionData.state = 'ended'; // Mark as ended immediately
   }
   
   // Feature 1: Day Overview Analysis
@@ -98,6 +108,11 @@ export class SessionManager {
   // Enhanced session summary generation
   generateSessionSummary(analysis) {
     try {
+      // **FIXED**: Handle voicemail sessions differently
+      if (this.sessionData.isVoicemail) {
+        return 'Voicemail detected - No meaningful interaction completed';
+      }
+      
       const commitmentCount = analysis.commitments?.length || 0;
       const decisionCount = analysis.key_decisions?.length || 0;
       const outcome = analysis.session_outcome || 'completed';
@@ -112,28 +127,37 @@ export class SessionManager {
       }
     } catch (error) {
       console.error('Error generating session summary:', error);
-      return 'Morning coaching session completed';
+      return this.sessionData.isVoicemail ? 'Voicemail interaction' : 'Morning coaching session completed';
     }
   }
   
-  // Feature 3: Enhanced logging to Mongo + Notion - CONSOLIDATED METHOD
+  // **COMPLETELY REWRITTEN**: Enhanced logging with proper voicemail handling
   async endSession() {
     try {
       console.log('🏁 Ending session, analyzing conversation...');
       
-      // Mark session as ended to prevent double logging
+      // **CRITICAL**: Prevent double processing
+      if (this.sessionData.state === 'ended') {
+        console.log('⚠️ Session already ended, skipping...');
+        return null;
+      }
+      
+      // Mark session as ended IMMEDIATELY to prevent double processing
       this.sessionData.state = 'ended';
       
-      // Check if this was a real conversation or just voicemail/short interaction
       const conversationLength = this.sessionData.conversation.length;
       const userMessages = this.sessionData.conversation.filter(msg => msg.user && msg.user.trim().length > 5);
       
       console.log(`📊 Conversation analysis: ${conversationLength} total exchanges, ${userMessages.length} meaningful user messages`);
+      console.log(`📱 Is voicemail: ${this.sessionData.isVoicemail}`);
       
       let sessionAnalysis;
       
-      // Only do LLM analysis for real conversations
-      if (userMessages.length >= 2 && conversationLength >= 3) {
+      // **FIXED**: Handle voicemail sessions completely separately
+      if (this.sessionData.isVoicemail) {
+        console.log('🤖 Processing as voicemail session...');
+        sessionAnalysis = this.createVoicemailAnalysis();
+      } else if (userMessages.length >= 2 && conversationLength >= 3) {
         try {
           console.log('🧠 Real conversation detected, running LLM analysis...');
           sessionAnalysis = await analyzeSession(
@@ -171,14 +195,14 @@ export class SessionManager {
         console.error('❌ MongoDB save failed:', mongoError);
       }
       
-      // Save to Notion with better error handling and validation
-      if (process.env.NOTION_LOGS_DB_ID && process.env.NOTION_API_KEY) {
+      // **FIXED**: Skip Notion logging for voicemail (already logged in gather.js)
+      if (!this.sessionData.isVoicemail && process.env.NOTION_LOGS_DB_ID && process.env.NOTION_API_KEY) {
         try {
           console.log('💾 Attempting to save to Notion...');
           
           const notionData = {
             summary: this.generateSessionSummary(sessionAnalysis),
-            goals: sessionAnalysis.commitments?.map(c => c.task).join(', ') || 'No specific goals set',
+            goals: this.extractGoalsFromAnalysis(sessionAnalysis),
             mood: this.extractMoodFromAnalysis(sessionAnalysis.mood_energy),
             duration: sessionRecord.duration
           };
@@ -195,11 +219,12 @@ export class SessionManager {
           
         } catch (notionError) {
           console.error('❌ Notion save failed:', notionError);
-          // Log the specific error for debugging
           if (notionError.response) {
             console.error('Notion API Response:', await notionError.response.text());
           }
         }
+      } else if (this.sessionData.isVoicemail) {
+        console.log('🤖 Skipping Notion logging for voicemail (already logged as missed call)');
       } else {
         console.log('⚠️ Notion not configured (missing NOTION_LOGS_DB_ID or NOTION_API_KEY)');
       }
@@ -218,29 +243,44 @@ export class SessionManager {
         duration: Math.floor((new Date() - this.sessionData.startTime) / 60000),
         error: 'Session ended with errors',
         conversation: this.sessionData.conversation,
-        decisions: this.sessionData.decisions
+        decisions: this.sessionData.decisions,
+        isVoicemail: this.sessionData.isVoicemail
       };
     }
   }
   
-  // Create analysis for minimal/short sessions (likely voicemail or hang-ups)
+  // **NEW**: Specific analysis for voicemail sessions
+  createVoicemailAnalysis() {
+    return {
+      key_decisions: ['VOICEMAIL DETECTED - No human interaction'],
+      commitments: [{
+        task: 'Voicemail answering machine response detected',
+        timeframe: 'N/A'
+      }],
+      mood_energy: 'N/A - Automated voicemail system',
+      session_outcome: 'voicemail'
+    };
+  }
+  
+  // **FIXED**: Create analysis for minimal/short sessions with better detection
   createMinimalSessionAnalysis(userMessages) {
     const firstMessage = userMessages[0]?.user || '';
     
-    // Check if this looks like voicemail response
-    if (/^\d+\.?$/.test(firstMessage) || 
-        firstMessage.length < 10 ||
-        /when you have finished recording.*hang up/i.test(firstMessage) ||
-        /you may hang up/i.test(firstMessage)) {
-      return {
-        key_decisions: ['VOICEMAIL DETECTED - No real decisions made'],
-        commitments: [{
-          task: 'No meaningful commitments made',
-          timeframe: 'N/A'
-        }],
-        mood_energy: 'VOICEMAIL - No human interaction detected',
-        session_outcome: 'brief'
-      };
+    // More comprehensive voicemail detection
+    const voicemailPatterns = [
+      /^\d+\.?$/,  // Just numbers like "866 200."
+      /when you have finished recording.*hang up/i,
+      /you may hang up/i,
+      /leave.*message.*after.*tone/i,
+      /not available.*leave.*message/i
+    ];
+    
+    const isLikelyVoicemail = voicemailPatterns.some(pattern => pattern.test(firstMessage)) || 
+                             firstMessage.length < 10;
+    
+    if (isLikelyVoicemail) {
+      console.log('🤖 Minimal session appears to be voicemail response');
+      return this.createVoicemailAnalysis();
     }
     
     return {
@@ -265,6 +305,26 @@ export class SessionManager {
       mood_energy: 'Unable to analyze due to technical issues',
       session_outcome: 'brief'
     };
+  }
+  
+  // **NEW**: Extract goals properly from analysis
+  extractGoalsFromAnalysis(analysis) {
+    if (!analysis || !analysis.commitments) {
+      return 'No specific goals set';
+    }
+    
+    const meaningfulCommitments = analysis.commitments
+      .filter(c => c.task && 
+              !c.task.includes('VOICEMAIL') && 
+              !c.task.includes('No meaningful') &&
+              !c.task.includes('Quick morning check-in'))
+      .map(c => c.task);
+    
+    if (meaningfulCommitments.length === 0) {
+      return 'Brief interaction completed';
+    }
+    
+    return meaningfulCommitments.join(', ');
   }
   
   async getRecentSessions(days = 7) {

@@ -16,9 +16,13 @@ export async function handleGather(req, res) {
 
   const response = new twiml.VoiceResponse();
 
-  // DETECT VOICEMAIL/ANSWERING MACHINE - this is key!
+  // **ENHANCED VOICEMAIL DETECTION** - this is key!
   if (isVoicemailMessage(userInput)) {
     console.log('🤖 VOICEMAIL DETECTED - Ending call and logging as missed');
+    
+    // **FIXED**: Mark session as voicemail BEFORE ending it
+    const session = getSession(callSid);
+    session.markAsVoicemail();
     
     // Log this as a missed call, not a successful session
     if (process.env.NOTION_LOGS_DB_ID) {
@@ -26,7 +30,7 @@ export async function handleGather(req, res) {
       console.log('📝 Voicemail interaction logged as missed call');
     }
     
-    // Clean up and hang up
+    // Clean up and hang up - session already marked as ended in markAsVoicemail()
     await endSession(callSid);
     ctx.clear(callSid);
     
@@ -53,6 +57,11 @@ export async function handleGather(req, res) {
     // Get session manager
     const session = getSession(callSid);
     const history = ctx.get(callSid) || [];
+    
+    // **IMPORTANT**: Track that this is a real conversation, not voicemail
+    if (session.sessionData.sessionType === 'unknown') {
+      session.sessionData.sessionType = 'conversation';
+    }
     
     // Add user input to history
     history.push({ role: 'user', content: userInput });
@@ -152,7 +161,7 @@ export async function handleGather(req, res) {
   }
 }
 
-// VOICEMAIL DETECTION - This is the key function!
+// **ENHANCED VOICEMAIL DETECTION** - This is the key function!
 function isVoicemailMessage(userInput) {
   const voicemailPatterns = [
     // Standard voicemail messages
@@ -175,24 +184,40 @@ function isVoicemailMessage(userInput) {
     /^hello.*not here/i,
     /^sorry.*missed.*call/i,
     
-    // Short automated responses that indicate voicemail
-    /^\d{5,}\.?$/,  // Just a long number like "66200"
+    // **ENHANCED**: Patterns specifically for your case
+    /^\d{3}\s*\d{3}\.?$/,  // "866 200." pattern
+    /^\d{2,4}\s*\d{2,4}\.?$/,  // Two number groups with optional period
     /^at the tone/i,
     /^please record/i,
     
-    // NEW: Common voicemail endings
+    // Common voicemail endings
     /when you have finished recording.*hang up/i,
     /you may hang up/i,
     /recording.*hang up/i
   ];
   
-  // Also check if it's suspiciously short and numeric (likely voicemail fragment)
-  const isShortNumeric = /^\d{3,10}\.?$/.test(userInput.trim());
-  const isSuspiciouslyShort = userInput.trim().length < 15 && userInput.includes('6');
+  // **ENHANCED**: More sophisticated detection
+  const trimmedInput = userInput.trim();
   
-  return voicemailPatterns.some(pattern => pattern.test(userInput.toLowerCase())) || 
-         isShortNumeric || 
-         isSuspiciouslyShort;
+  // Check for the specific "866 200." pattern from your logs
+  if (/^\d{3}\s*\d{3}\.?$/.test(trimmedInput)) {
+    console.log(`🤖 Detected phone number pattern: "${trimmedInput}"`);
+    return true;
+  }
+  
+  // Check if it's suspiciously short and numeric (likely voicemail fragment)
+  const isShortNumeric = /^\d{3,10}\.?$/.test(trimmedInput);
+  const isJustNumbers = /^\d+[\s.]*\d*\.?$/.test(trimmedInput);
+  
+  // Enhanced detection for automated messages
+  const isAutomatedMessage = voicemailPatterns.some(pattern => pattern.test(userInput.toLowerCase()));
+  
+  if (isAutomatedMessage || isShortNumeric || isJustNumbers) {
+    console.log(`🤖 Voicemail detection triggered by: ${isAutomatedMessage ? 'Pattern match' : isShortNumeric ? 'Short numeric' : 'Just numbers'}`);
+    return true;
+  }
+  
+  return false;
 }
 
 // Better session ending detection
@@ -220,6 +245,9 @@ async function handleSessionEnd(callSid, userInput, response, res) {
     // Extract session insights for Notion
     const sessionInsights = extractSessionInsights(conversationHistory, session);
     
+    // **CRITICAL**: Mark session as ending properly to prevent double logging
+    session.setState('ending');
+    
     // End the session (this saves to MongoDB) - ONLY ONCE
     const sessionData = await endSession(callSid);
     
@@ -245,7 +273,7 @@ async function handleSessionEnd(callSid, userInput, response, res) {
   }
 }
 
-// Extract insights for your Notion database
+// **ENHANCED**: Extract insights with better analysis
 function extractSessionInsights(conversationHistory, session) {
   const insights = {
     date: new Date().toISOString().split('T')[0],
@@ -279,21 +307,32 @@ function extractSessionInsights(conversationHistory, session) {
         taskMentions.push(`${timeMatch[0]} commitment made`);
       }
     }
+    
+    // Look for specific action words
+    const actionMatches = msg.match(/\b(start|begin|do|work on|focus on)\s+([^.!?]*)/gi);
+    if (actionMatches) {
+      actionMatches.forEach(match => {
+        taskMentions.push(match.trim());
+      });
+    }
   });
   
   insights.priorities = [...new Set(taskMentions)].slice(0, 3); // Top 3 unique priorities
   
-  // Analyze mood from conversation tone
+  // **ENHANCED**: Better mood analysis from conversation tone
   const combinedText = userMessages.join(' ').toLowerCase();
-  if (/good|great|excellent|awesome|ready|excited|energized/.test(combinedText)) {
+  if (/good|great|excellent|awesome|ready|excited|energized|yes|absolutely|perfect/.test(combinedText)) {
     insights.mood = 'Positive';
     insights.energyLevel = 'High';
-  } else if (/tired|slow|difficult|hard|struggle|overwhelmed/.test(combinedText)) {
+  } else if (/tired|slow|difficult|hard|struggle|overwhelmed|no|maybe|unsure/.test(combinedText)) {
     insights.mood = 'Low';
     insights.energyLevel = 'Low';
-  } else if (/ok|fine|decent|normal|alright/.test(combinedText)) {
+  } else if (/ok|fine|decent|normal|alright|sure/.test(combinedText)) {
     insights.mood = 'Neutral';
     insights.energyLevel = 'Medium';
+  } else if (/focused|concentrate|priority|important|urgent/.test(combinedText)) {
+    insights.mood = 'Focused';
+    insights.energyLevel = 'High';
   }
   
   // Create notes summary
@@ -308,7 +347,14 @@ function extractSessionInsights(conversationHistory, session) {
     keyPoints.push(`Focus: ${insights.priorities[0]}`);
   }
   
-  insights.notes = keyPoints.join('. ') || 'Brief check-in completed';
+  // Add conversation quality assessment
+  if (userMessages.length > 3) {
+    keyPoints.push('Extended conversation');
+  } else if (userMessages.length > 1) {
+    keyPoints.push('Brief interaction');
+  }
+  
+  insights.notes = keyPoints.join('. ') || 'Quick check-in completed';
   
   return insights;
 }
@@ -324,7 +370,12 @@ function getEndingMessage(insights) {
   ];
   
   if (insights.priorities.length > 0) {
-    return `${insights.priorities[0]} locked in. Execute.`;
+    const priority = insights.priorities[0];
+    // Shorten long priorities for voice
+    const shortPriority = priority.length > 30 ? 
+      priority.substring(0, 30).split(' ').slice(0, -1).join(' ') : 
+      priority;
+    return `${shortPriority} locked in. Execute.`;
   }
   
   return messages[Math.floor(Math.random() * messages.length)];

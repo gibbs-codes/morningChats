@@ -167,7 +167,7 @@ function generateDominantOpener(habits, events) {
   return `${greeting} ${details.join(' ')} Pick one.`;
 }
 
-// Enhanced status callback with MISSED CALL ACCOUNTABILITY
+// Enhanced status callback with MISSED CALL ACCOUNTABILITY - FIXED TO PREVENT DOUBLE LOGGING
 export async function handleStatus(req, res) {
   const callSid = req.body.CallSid;
   const callStatus = req.body.CallStatus;
@@ -187,24 +187,25 @@ export async function handleStatus(req, res) {
         await notionClient.logMissedCall(process.env.NOTION_LOGS_DB_ID, phoneNumber, callStatus);
         console.log('📝 Missed call logged to Notion for accountability');
       }
+      
+      // Clean up session
+      await endSession(callSid);
     } else {
       console.log('⚠️ Session already ended properly, skipping missed call log');
     }
     
-    // Clean up any session that might have been created
-    await endSession(callSid);
     ctx.clear(callSid);
   }
   
   if (callStatus === 'completed') {
-    console.log(`🧹 Cleaning up completed call: ${callSid}`);
-    // Only clean up if session wasn't already ended by gather handler
+    console.log(`🧹 Call completed, checking session state: ${callSid}`);
+    // **FIXED**: Only clean up if session wasn't already ended by gather handler
     const session = getSession(callSid);
     if (session && session.sessionData.state !== 'ended') {
       console.log('⚠️ Session not properly ended by gather handler, ending now...');
       await endSession(callSid);
     } else {
-      console.log('✅ Session already ended properly by gather handler');
+      console.log('✅ Session already ended properly by gather handler, just cleaning up context');
     }
     ctx.clear(callSid);
   }
