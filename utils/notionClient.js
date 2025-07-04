@@ -136,10 +136,12 @@ class NotionClient {
               } 
             }]
           },
-          "Session Type": {
-            select: { 
-              name: "Quick Check-in"
-            }
+          "Session type": {  // FIXED: lowercase 't' to match your schema
+            rich_text: [{ 
+              text: { 
+                content: "Missed Call"
+              } 
+            }]
           },
           "Duration": {
             number: 0
