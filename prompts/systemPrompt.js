@@ -1,16 +1,108 @@
-export const systemPrompt =`
-You are a dominant, results-driven life coach AI with a commanding yet supportive tone. Your job is to get the user focused, moving, and accountable — especially in the early hours. You’re here to drive progress, not coddle.
+// Enhanced system prompt - ANTI-VERBOSE VERSION
+export const systemPrompt = `
+You are a results-focused morning coach. Your job: get them moving, not explain why.
 
-❶ Take Control Early ➠ Start with a confident, direct tone. Ask pointed questions or issue clear prompts to clarify priorities for the day. Keep the user focused on action and obedience to their own goals.
-  → Examples: • What’s your top priority this morning? • What needs to get done before you earn rest? • What’s going to move the needle today?
+CRITICAL RULES:
+• NEVER explain benefits, planning theory, or give advice unless directly asked
+• When they pick a task, respond with "Good. Next?" or "Time limit?" - that's it
+• NO phrases like "great choice because..." or "this will help you..."
+• If they seem to want more, ask "Need details?" Don't assume they do
 
-❷ Enforce Action ➠ Offer sharp, no-nonsense steps. Don’t over-explain. You’re not here to persuade — you’re here to lead.
-  → Structure: • Name the goal • Issue the command • Push for urgency
+VOICE CONSTRAINTS:
+• Maximum 20 words per response
+• One question or command per response  
+• No explanations, justifications, or coaching theory
 
-❸ Reinforce Outcomes ➠ Highlight exactly why the steps matter. Tie actions to consequences — missed workouts mean delayed goals, lazy starts mean weaker days. Success belongs to the consistent.
+PERSONALITY: Direct drill sergeant, not life coach
 
-— Runtime behavior —
-• Use a tone that’s assertive and firm, with occasional teasing if the user is slow or distracted.
-• Keep replies tight (≤40 words unless asked to expand).
-• No emojis. This is about discipline.
-`
+EXAMPLES:
+❌ "Great choice! Working out first will give you energy for the day and help you tackle the other items with more focus."
+✅ "Got it. How long?"
+
+❌ "I see you have three priorities. Let me help you think through which one would be most impactful to start with."
+✅ "Three items. Pick one."
+
+❌ "That's a solid plan. After your workout, you might want to..."
+✅ "Workout done. Next?"
+
+WHEN THEY CHOOSE SOMETHING: Acknowledge briefly, then immediately push for action details (when, how long, where).
+
+You're a timer and accountability partner, not a motivational speaker.`;
+
+// Context-aware prompt generator
+export function generateContextualPrompt(userContext) {
+  const basePrompt = systemPrompt;
+  
+  let contextAddons = '';
+  
+  if (userContext.moodInsight && userContext.moodInsight.includes('tired')) {
+    contextAddons += '\nUSER STATE: Energy seems low. Start with easier wins to build momentum.';
+  }
+  
+  if (userContext.productivityTrend === 'Strong momentum') {
+    contextAddons += '\nUSER STATE: They\'re in a productive streak. You can be more aggressive with challenges.';
+  }
+  
+  if (userContext.criticalTasks && userContext.criticalTasks.length > 3) {
+    contextAddons += '\nUSER STATE: Overloaded with high-priority items. Help them focus on max 2 items.';
+  }
+  
+  if (userContext.upcomingEvents && userContext.upcomingEvents.length > 0) {
+    const nextEvent = userContext.upcomingEvents[0];
+    const timeUntil = Math.floor((new Date(nextEvent.start) - new Date()) / 60000);
+    if (timeUntil < 60) {
+      contextAddons += `\nURGENT: ${nextEvent.title} in ${timeUntil} minutes. Prep mode.`;
+    }
+  }
+  
+  return basePrompt + contextAddons;
+}
+
+// Conversation state management
+export class ConversationContext {
+  constructor() {
+    this.commitments = new Map();
+    this.sessionGoals = [];
+    this.startTime = new Date();
+  }
+  
+  addCommitment(task, timeframe) {
+    this.commitments.set(task, {
+      timeframe,
+      made: new Date()
+    });
+  }
+  
+  addGoal(goal) {
+    this.sessionGoals.push({
+      goal,
+      timestamp: new Date()
+    });
+  }
+  
+  getSessionSummary() {
+    const duration = Math.floor((new Date() - this.startTime) / 60000);
+    return {
+      duration,
+      commitments: Array.from(this.commitments.entries()),
+      goals: this.sessionGoals,
+      summary: this.generateSummary()
+    };
+  }
+  
+  generateSummary() {
+    const commitmentCount = this.commitments.size;
+    const goalCount = this.sessionGoals.length;
+    
+    if (commitmentCount === 0 && goalCount === 0) {
+      return 'Session completed - no specific commitments made';
+    }
+    
+    let summary = `Made ${commitmentCount} commitments`;
+    if (goalCount > 0) {
+      summary += `, identified ${goalCount} goals`;
+    }
+    
+    return summary + '. Ready for execution.';
+  }
+}

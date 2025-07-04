@@ -1,18 +1,16 @@
 import pkg from 'twilio';
 const { twiml } = pkg;
 import { getTodayPlan } from '../utils/getTodayPlan.js';
-import { formatTime } from '../utils/formatTime.js';
+import { generateDynamicOpener } from '../utils/dynamicOpener.js';
 import { ctx } from '../memory/context.js';
-import { systemPrompt } from '../prompts/systemPrompt.js'; // adjust path if needed
+import { systemPrompt } from '../prompts/systemPrompt.js';
 
 export async function handleVoice(req, res) {
   const callSid = req.body.CallSid;
   const { events, habits } = await getTodayPlan();
 
-  const opener = ['Morning!', 'Hey there!', 'Hello!'][Math.floor(Math.random() * 3)];
-  const evList = events.length ? events.map(e => `${e.title} at ${formatTime(e.start)}`).join(', ') : 'No events';
-  const habitList = habits.length ? habits.map(h => h.text).join(', ') : 'No Habitica tasks';
-  const intro = `${opener} You have: ${evList}. Habitica tasks: ${habitList}. What should we tackle first?`;
+  // Generate dynamic opener instead of static script
+  const intro = generateDynamicOpener(events, habits);
 
   ctx.set(callSid, [
     { role: 'system', content: systemPrompt },
