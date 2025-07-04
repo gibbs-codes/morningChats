@@ -201,7 +201,10 @@ export async function handleStatus(req, res) {
     // Only clean up if session wasn't already ended by gather handler
     const session = getSession(callSid);
     if (session && session.sessionData.state !== 'ended') {
+      console.log('⚠️ Session not properly ended by gather handler, ending now...');
       await endSession(callSid);
+    } else {
+      console.log('✅ Session already ended properly by gather handler');
     }
     ctx.clear(callSid);
   }

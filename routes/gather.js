@@ -178,7 +178,12 @@ function isVoicemailMessage(userInput) {
     // Short automated responses that indicate voicemail
     /^\d{5,}\.?$/,  // Just a long number like "66200"
     /^at the tone/i,
-    /^please record/i
+    /^please record/i,
+    
+    // NEW: Common voicemail endings
+    /when you have finished recording.*hang up/i,
+    /you may hang up/i,
+    /recording.*hang up/i
   ];
   
   // Also check if it's suspiciously short and numeric (likely voicemail fragment)

@@ -228,14 +228,17 @@ export class SessionManager {
     const firstMessage = userMessages[0]?.user || '';
     
     // Check if this looks like voicemail response
-    if (/^\d+\.?$/.test(firstMessage) || firstMessage.length < 10) {
+    if (/^\d+\.?$/.test(firstMessage) || 
+        firstMessage.length < 10 ||
+        /when you have finished recording.*hang up/i.test(firstMessage) ||
+        /you may hang up/i.test(firstMessage)) {
       return {
-        key_decisions: ['Minimal interaction - likely voicemail or technical issue'],
+        key_decisions: ['VOICEMAIL DETECTED - No real decisions made'],
         commitments: [{
           task: 'No meaningful commitments made',
           timeframe: 'N/A'
         }],
-        mood_energy: 'Unknown - insufficient interaction',
+        mood_energy: 'VOICEMAIL - No human interaction detected',
         session_outcome: 'brief'
       };
     }

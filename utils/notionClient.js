@@ -274,12 +274,14 @@ class NotionClient {
             }]
           },
           
-          // Only add Session Type if it exists in the database
-          ...(await this.fieldExists(databaseId, 'Session Type') ? {
-            "Session Type": {
-              select: { 
-                name: this.determineSessionType(sessionData)
-              }
+          // Only add Session Type if you have "Session type" field in Notion
+          ...(await this.fieldExists(databaseId, 'Session type') ? {
+            "Session type": {
+              rich_text: [{ 
+                text: { 
+                  content: this.determineSessionType(sessionData)
+                } 
+              }]
             }
           } : {}),
           
@@ -376,6 +378,11 @@ class NotionClient {
     
     const moodText = moodData.toLowerCase();
     
+    // Check for voicemail first
+    if (moodText.includes('voicemail') || moodText.includes('no human interaction')) {
+      return 'Voicemail';
+    }
+    
     if (moodText.includes('positive') || moodText.includes('excited') || moodText.includes('great')) {
       return 'Positive';
     } else if (moodText.includes('low') || moodText.includes('tired') || moodText.includes('difficult')) {
@@ -394,6 +401,11 @@ class NotionClient {
     if (!moodData) return 'Medium';
     
     const energyText = moodData.toLowerCase();
+    
+    // Check for voicemail first
+    if (energyText.includes('voicemail') || energyText.includes('no human interaction')) {
+      return 'N/A - Voicemail';
+    }
     
     if (energyText.includes('high') || energyText.includes('energetic') || energyText.includes('excited')) {
       return 'High';
@@ -417,6 +429,12 @@ class NotionClient {
 
   // Helper: Determine session type based on content
   determineSessionType(sessionData) {
+    // Check for voicemail first
+    if (sessionData.goals === 'No meaningful commitments made' || 
+        sessionData.summary?.includes('voicemail')) {
+      return 'Voicemail';
+    }
+    
     const summary = (sessionData.summary || '').toLowerCase();
     const goals = (sessionData.goals || '').toLowerCase();
     const combinedText = `${summary} ${goals}`;
@@ -436,9 +454,9 @@ class NotionClient {
       return 'Goal Setting';
     }
     
-    // Default to quick check-in for brief sessions
-    if (sessionData.duration && sessionData.duration < 3) {
-      return 'Quick Check-in';
+    // Default to answered for real interactions
+    if (sessionData.duration && sessionData.duration > 0) {
+      return 'Answered';
     }
     
     // Default case
