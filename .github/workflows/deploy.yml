@@ -1,0 +1,146 @@
+name: Deploy Morning-Chats to Mac Mini
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  APP_NAME: morning-chats
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Configure Docker environment
+      run: |
+        echo "Setting up Docker environment for ${{ github.repository }}..."
+        
+        # Create Docker config directory
+        mkdir -p ~/.docker
+        
+        # Create config without keychain
+        cat > ~/.docker/config.json << 'EOF'
+        {
+          "auths": {},
+          "credsStore": "",
+          "credHelpers": {},
+          "experimental": "disabled"
+        }
+        EOF
+        
+        # Ensure shared network exists
+        docker network create gibbs-apps 2>/dev/null || echo "Network already exists"
+        
+        # Test Docker access
+        echo "Testing Docker access..."
+        docker --version
+        
+    - name: Set up deployment directory
+      run: |
+        DEPLOY_DIR=~/deployments/${{ env.APP_NAME }}
+        echo "Cleaning up old deployment..."
+        
+        # Stop any existing container
+        docker stop morning-chats-production 2>/dev/null || true
+        docker rm morning-chats-production 2>/dev/null || true
+        
+        # Clean up directory but preserve data volumes
+        rm -rf $DEPLOY_DIR
+        mkdir -p $DEPLOY_DIR
+        mkdir -p $DEPLOY_DIR/memory
+        mkdir -p $DEPLOY_DIR/logs
+        
+        echo "Copying new code..."
+        cp -r $GITHUB_WORKSPACE/* $DEPLOY_DIR/
+        
+    - name: Copy secrets
+      run: |
+        DEPLOY_DIR=~/deployments/${{ env.APP_NAME }}
+        APP_SECRETS=~/secrets/${{ env.APP_NAME }}
+        
+        echo "Copying environment file..."
+        if [ -f "$APP_SECRETS/production.env" ]; then
+          cp $APP_SECRETS/production.env $DEPLOY_DIR/.env
+          echo "✅ Environment file copied as .env"
+        else
+          echo "❌ Environment file not found at $APP_SECRETS/production.env"
+          exit 1
+        fi
+        
+    - name: Build and start container
+      env:
+        DOCKER_CONFIG: ~/.docker
+        DOCKER_BUILDKIT: 0
+      run: |
+        cd ~/deployments/${{ env.APP_NAME }}
+        echo "Building Morning-Chats..."
+        
+        # Stop any existing container
+        docker stop morning-chats-production 2>/dev/null || true
+        docker rm morning-chats-production 2>/dev/null || true
+        
+        # Build the image
+        docker build --no-cache -t morning-chats:latest .
+        
+        # Run the container with shared network
+        docker run -d \
+          --name morning-chats-production \
+          --restart unless-stopped \
+          --network gibbs-apps \
+          -p 3002:3002 \
+          -v $(pwd)/memory:/usr/src/app/memory:rw \
+          -v $(pwd)/logs:/usr/src/app/logs:rw \
+          --env-file .env \
+          -e NODE_ENV=production \
+          -e PORT=3002 \
+          morning-chats:latest
+        
+    - name: Verify deployment
+      run: |
+        echo "Waiting for container to start..."
+        sleep 20
+        
+        echo "Checking container status..."
+        docker ps | grep morning-chats-production
+        
+        echo "Testing health endpoint..."
+        if curl -f http://localhost:3002/health; then
+          echo "✅ Morning-Chats deployment successful!"
+        else
+          echo "❌ Health check failed"
+          echo "Container logs:"
+          docker logs morning-chats-production
+          exit 1
+        fi
+        
+        echo "Testing status endpoint..."
+        curl -s http://localhost:3002/status | head -20
+        
+        echo "Testing network connectivity to other services..."
+        if docker exec morning-chats-production curl -f http://ctaaapi-production:3001/health 2>/dev/null; then
+          echo "✅ Can reach CTAAAPI from Morning-Chats!"
+        else
+          echo "⚠️  Cannot reach CTAAAPI (this may be expected)"
+        fi
+        
+    - name: Clean up old images
+      run: |
+        docker image prune -f --filter label=app=morning-chats || true
+        
+    - name: Show final status
+      run: |
+        echo "=== Final Status ==="
+        docker ps | grep -E "(morning-chats-production|ctaaapi-production|projector-ui-production)"
+        echo ""
+        echo "Morning-Chats is available at:"
+        echo "  - Health: http://localhost:3002/health"
+        echo "  - Status: http://localhost:3002/status"
+        echo "  - Twilio: (continues using your existing ngrok tunnel)"
+        echo ""
+        echo "Network: gibbs-apps"
+        docker network inspect gibbs-apps --format='{{range .Containers}}{{.Name}}: {{.IPv4Address}}{{"\n"}}{{end}}'
