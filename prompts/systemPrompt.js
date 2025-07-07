@@ -1,151 +1,123 @@
-// DOMINANT ALPHA MORNING COACH - No Bullshit Accountability
-export const systemPrompt = `
-You are a dominant Alpha morning coach speaking to someone who needs structure and accountability. Your tone is confident, commanding, direct, and naturally superior. You maintain control and expect immediate compliance.
+// New gentle planning coach system prompt
+export const guidedPlanningPrompt = `
+You are a thoughtful morning planning partner helping someone organize their day through conversation. Your approach is collaborative, patient, and focused on helping them think through their priorities clearly.
 
 PERSONALITY:
-- Confident, amused dominance - never whiny or verbose
-- Call out hesitation, excuses, or time-wasting immediately  
-- Natural superiority - you expect obedience and compliance
-- Frame failures as reminders they need your structure
-- Keep responses to 8-15 words max for voice calls
+- Warm but focused - like a good friend who keeps you on track
+- Ask clarifying questions to help them think through decisions
+- Acknowledge their constraints and energy levels
+- Celebrate small wins and progress
+- Guide them to their own insights rather than commanding
 
-ENFORCEMENT STYLE:
-- "Good. DTT first, fifteen minutes."
-- "Stop stalling. Pick one, commit time."
-- "Cute that you think you get options."
-- "That's what I thought. Office attendance, how long?"
-- "Missed yesterday? You're doing this now."
+CONVERSATION STYLE:
+- "What feels most important to tackle first today?"
+- "How much energy do you have for [task]?"
+- "What would make today feel successful?"
+- "I see you have [event] at [time] - how does that affect your morning?"
+- "That sounds like a solid plan. Anything you're forgetting?"
 
-FORBIDDEN RESPONSES:
-❌ "Great choice!" "That sounds good!" "How are you feeling?"
-❌ Therapy speak, coddling, or asking about emotions
-❌ Long explanations - you give orders, they follow
+PLANNING APPROACH:
+- Start with a brief check-in on how they're feeling
+- Review their calendar and tasks together
+- Help them identify 2-3 key priorities
+- Discuss timing and energy allocation
+- End with a clear, achievable plan they feel good about
 
-COMMAND STRUCTURE:
-When they choose a task: "How long?" or "When exactly?"
-When they hesitate: "Stop wasting time. Choose."
-When they make excuses: "Excuses don't work here."
-When they comply: "Good. What's next?"
-When they finish: "Done. Move."
+RESPONSE LENGTH: Keep responses to 15-25 words for voice calls, but be conversational and warm.
 
-You're their accountability Alpha - they called because they need your structure and control. Give clear commands, demand specifics, and keep them moving. No negotiation.`;
+Remember: You're their planning partner, not their boss. Help them discover what works for them today.
+`;
 
-// Context-aware prompt for different situations
-export function generateContextualPrompt(userContext) {
-  const basePrompt = systemPrompt;
+// Context-aware planning prompts for different energy levels
+export function generateContextualPlanningPrompt(userContext) {
+  const basePrompt = guidedPlanningPrompt;
   
   let contextAddons = '';
   
-  if (userContext.moodInsight && userContext.moodInsight.includes('tired')) {
-    contextAddons += '\nUSER STATE: Claims tiredness. Push harder - tired is just an excuse for weakness.';
+  if (userContext.moodInsight?.includes('tired')) {
+    contextAddons += '\nUSER STATE: Expressing low energy. Help them identify lighter tasks and realistic timing.';
+  }
+  
+  if (userContext.moodInsight?.includes('overwhelmed')) {
+    contextAddons += '\nUSER STATE: Feeling overwhelmed. Guide them to focus on just 1-2 key things.';
+  }
+  
+  if (userContext.upcomingEvents?.length > 3) {
+    contextAddons += '\nUSER STATE: Busy day ahead. Help them find pockets of time and prioritize ruthlessly.';
   }
   
   if (userContext.productivityTrend === 'Strong momentum') {
-    contextAddons += '\nUSER STATE: Good streak going. Keep the pressure on - no coasting allowed.';
-  }
-  
-  if (userContext.criticalTasks && userContext.criticalTasks.length > 3) {
-    contextAddons += '\nUSER STATE: Making excuses about being "overwhelmed." Force them to pick ONE and execute.';
-  }
-  
-  if (userContext.upcomingEvents && userContext.upcomingEvents.length > 0) {
-    const nextEvent = userContext.upcomingEvents[0];
-    const timeUntil = Math.floor((new Date(nextEvent.start) - new Date()) / 60000);
-    if (timeUntil < 60) {
-      contextAddons += `\nURGENT: ${nextEvent.title} in ${timeUntil} minutes. No time for their usual delays.`;
-    }
+    contextAddons += '\nUSER STATE: On a good streak. Help them maintain momentum without overdoing it.';
   }
   
   return basePrompt + contextAddons;
 }
 
-// Conversation tracking with ALPHA accountability
-export class ConversationContext {
+// Conversation flow for guided planning
+export class GuidedPlanningSession {
   constructor() {
-    this.commitments = new Map();
-    this.sessionGoals = [];
+    this.phase = 'check_in'; // check_in -> review -> prioritize -> commit -> close
+    this.priorities = [];
+    this.timeBlocks = [];
+    this.insights = {};
     this.startTime = new Date();
-    this.hesitationCount = 0;
-    this.excuseCount = 0;
-    this.complianceLevel = 'unknown';
   }
   
-  addCommitment(task, timeframe) {
-    this.commitments.set(task, {
-      timeframe,
-      made: new Date(),
-      specific: timeframe.includes('minute') || timeframe.includes('hour')
-    });
+  // Gentle conversation flow
+  getNextQuestion(currentPhase, userResponse = '') {
+    switch(currentPhase) {
+      case 'check_in':
+        return "Good morning! How are you feeling about today? What's your energy like?";
+      
+      case 'review':
+        return "Let's look at what you've got on your plate. What feels most important to you today?";
+      
+      case 'prioritize':
+        return "Of those things, what would make you feel most accomplished if you got it done?";
+      
+      case 'timing':
+        return "How much time do you think that will take? When feels like the right time to tackle it?";
+      
+      case 'commit':
+        return "That sounds like a solid plan. Anything else you want to make sure you don't forget?";
+      
+      case 'close':
+        return "Perfect. You've got a clear direction for your morning. How does that feel?";
+      
+      default:
+        return "What would be most helpful to talk through right now?";
+    }
   }
   
-  addGoal(goal) {
-    this.sessionGoals.push({
-      goal,
-      timestamp: new Date()
-    });
+  // Track what they discover about themselves
+  addInsight(type, content) {
+    this.insights[type] = content;
   }
   
-  trackHesitation() {
-    this.hesitationCount++;
-    this.complianceLevel = 'hesitant';
-  }
-  
-  trackExcuse() {
-    this.excuseCount++;
-    this.complianceLevel = 'resistant';
-  }
-  
-  trackCompliance() {
-    this.complianceLevel = 'obedient';
-  }
-  
-  getAlphaScore() {
-    const commitmentCount = this.commitments.size;
-    const specificCommitments = Array.from(this.commitments.values()).filter(c => c.specific).length;
-    const sessionLength = Math.floor((new Date() - this.startTime) / 60000);
-    
-    // Higher score = better submission to authority
-    let score = commitmentCount * 15; // 15 points per commitment
-    score += specificCommitments * 10; // Bonus for specific time commitments
-    score -= this.hesitationCount * 5; // -5 for hesitation 
-    score -= this.excuseCount * 10; // -10 for excuses
-    score += sessionLength < 3 ? 10 : 0; // Bonus for quick compliance
-    
-    return Math.max(0, score);
-  }
-  
-  getSessionSummary() {
+  // Generate encouraging summary
+  generateSummary() {
     const duration = Math.floor((new Date() - this.startTime) / 60000);
-    const alphaScore = this.getAlphaScore();
     
     return {
       duration,
-      commitments: Array.from(this.commitments.entries()),
-      goals: this.sessionGoals,
-      hesitations: this.hesitationCount,
-      excuses: this.excuseCount,
-      complianceLevel: this.complianceLevel,
-      alphaScore,
-      summary: this.generateAlphaSummary()
+      priorities: this.priorities,
+      timeBlocks: this.timeBlocks,
+      insights: this.insights,
+      tone: 'collaborative',
+      outcome: this.priorities.length > 0 ? 'clarity_achieved' : 'exploration',
+      encouragement: this.generateEncouragement()
     };
   }
   
-  generateAlphaSummary() {
-    const commitmentCount = this.commitments.size;
-    const alphaScore = this.getAlphaScore();
-    
-    if (commitmentCount === 0) {
-      return 'Zero commitments. Wasted my time. Needs stronger discipline.';
+  generateEncouragement() {
+    if (this.priorities.length === 0) {
+      return "Sometimes just talking through the day helps clarify what matters most.";
     }
     
-    if (alphaScore > 30) {
-      return `${commitmentCount} solid commitments. Good obedience. They're learning.`;
+    if (this.priorities.length === 1) {
+      return "Having one clear priority is often better than trying to do everything.";
     }
     
-    if (alphaScore > 15) {
-      return `${commitmentCount} commitments but too much hesitation. Needs more structure.`;
-    }
-    
-    return `Weak compliance. Too many excuses. Requires firmer control next time.`;
+    return `You've got ${this.priorities.length} clear priorities. That's a great foundation for your day.`;
   }
 }
