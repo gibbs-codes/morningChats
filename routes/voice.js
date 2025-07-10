@@ -4,7 +4,7 @@ const { twiml } = pkg;
 import { getTodayPlan } from '../utils/getTodayPlan.js';
 import { getSession, endSession } from '../utils/sessionManager.js';
 import { ctx } from '../memory/context.js';
-import { guidedPlanningPrompt } from '../prompts/gentleSystemPrompt.js';
+import { guidedPlanningPrompt } from '../prompts/systemPrompt.js';
 
 export async function handleVoice(req, res) {
   const callSid = req.body.CallSid;
