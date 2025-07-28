@@ -1,16 +1,21 @@
+// utils/getTodayPlan.js - Enhanced with agentic calendar capabilities
 import fetch from 'node-fetch';
-import { analyzeDayStructure } from './llmReply.js'; // Add the missing import
+import { analyzeDayStructure } from './llmReply.js';
 import { formatTime } from './formatTime.js';
+import { agenticCalendarClient } from './agenticCalendarClient.js';
 
 export async function getTodayPlan() {
-  console.log('📋 Fetching today\'s plan from Habitica and calendar...');
+  console.log('📋 Fetching today\'s plan with agentic calendar intelligence...');
   
   try {
-    const [eventsRes, habitsRes] = await Promise.all([
-      fetch(process.env.EVENTS_ENDPOINT).catch(err => {
-        console.log('⚠️ Events fetch failed:', err.message);
-        return { json: () => [] };
+    const [events, habitsRes] = await Promise.all([
+      // AGENTIC: Use enhanced calendar client
+      agenticCalendarClient.getTodaysEvents().catch(err => {
+        console.log('⚠️ Agentic calendar fetch failed:', err.message);
+        return [];
       }),
+      
+      // Keep Habitica fetch as-is
       fetch('https://habitica.com/api/v3/tasks/user?type=dailys', {
         headers: {
           'x-api-user': process.env.HABITICA_USER_ID,
@@ -22,7 +27,6 @@ export async function getTodayPlan() {
       })
     ]);
 
-    const events = await eventsRes.json();
     console.log('📅 Fetched events:', events?.length || 0);
     
     const habitsData = await habitsRes.json();
@@ -50,22 +54,28 @@ export async function getTodayPlan() {
 }
 
 export async function getTodayPlanWithAnalysis() {
-  console.log('🧠 Getting today\'s plan with AI analysis...');
+  console.log('🧠 Getting agentic plan with enhanced calendar intelligence...');
   
   try {
     // Get the raw data
     const { events, habits } = await getTodayPlan();
+    
+    // AGENTIC: Get enhanced calendar analysis
+    const calendarAnalysis = await agenticCalendarClient.analyzeSchedule();
+    const availableSlots = await agenticCalendarClient.findAvailableSlots(60);
     
     if (habits.length === 0 && events.length === 0) {
       return {
         events,
         habits,
         analysis: null,
-        opener: "Morning. No scheduled tasks or events today. What's your main focus?"
+        calendarInsights: calendarAnalysis,
+        availableSlots,
+        opener: "Morning. Clear calendar today - perfect for deep work. What's your main focus?"
       };
     }
 
-    // Only analyze if we have substantial data
+    // Enhanced analysis with calendar intelligence
     let analysis = null;
     if (habits.length > 0 || events.length > 0) {
       try {
@@ -77,36 +87,40 @@ export async function getTodayPlanWithAnalysis() {
       }
     }
     
-    // Generate informed opener
-    const opener = generateInformedOpener(habits, events, analysis);
+    // Generate agentic opener with calendar intelligence
+    const opener = generateAgenticOpener(habits, events, analysis, calendarAnalysis);
     
-    console.log('✅ Plan with analysis complete');
+    console.log('✅ Agentic plan with calendar insights complete');
     
     return {
       events,
       habits,
       analysis,
+      calendarInsights: calendarAnalysis,
+      availableSlots,
       opener
     };
     
   } catch (error) {
-    console.error('❌ Error in plan analysis:', error);
+    console.error('❌ Error in agentic plan analysis:', error);
     const { events, habits } = await getTodayPlan();
     
     return {
       events,
       habits,
       analysis: null,
+      calendarInsights: null,
+      availableSlots: [],
       opener: `Morning. ${habits.length} tasks and ${events.length} events today. What's first?`
     };
   }
 }
 
-function generateInformedOpener(habits, events, analysis) {
+function generateAgenticOpener(habits, events, analysis, calendarInsights) {
   const now = new Date();
   const hour = now.getHours();
   
-  // Time-based greeting
+  // Time-based greeting with intelligence
   const greeting = hour < 8 ? "Early start today." : 
                   hour < 10 ? "Morning." : "Getting started.";
   
@@ -122,7 +136,18 @@ function generateInformedOpener(habits, events, analysis) {
   
   let details = [];
   
-  // Add urgent events
+  // AGENTIC: Add intelligent calendar insights
+  if (calendarInsights) {
+    if (calendarInsights.timeUntilNext && calendarInsights.timeUntilNext < 60) {
+      details.push(`Next event in ${calendarInsights.timeUntilNext} minutes`);
+    } else if (calendarInsights.upcomingEvents === 0) {
+      details.push('Clear calendar ahead');
+    } else if (calendarInsights.upcomingEvents > 3) {
+      details.push('Busy day scheduled');
+    }
+  }
+  
+  // Add urgent events with intelligent context
   if (urgentEvents.length > 0) {
     const nextEvent = urgentEvents[0];
     const timeUntil = Math.floor((new Date(nextEvent.start) - now) / 60000);
@@ -130,25 +155,35 @@ function generateInformedOpener(habits, events, analysis) {
     if (timeUntil < 90) {
       details.push(`${nextEvent.title} in ${timeUntil} minutes`);
     } else {
-      details.push(`${nextEvent.title} at ${formatTime(nextEvent.start)}`);
+      details.push(`${nextEvent.title} coming up`);
     }
   }
   
-  // Add top habits with actual names
+  // Add top habits with priority awareness
   if (topHabits.length > 0) {
     const habitNames = topHabits.slice(0, 2).map(h => {
       // Truncate long habit names for voice
-      return h.text.length > 25 ? h.text.substring(0, 25) + '...' : h.text;
+      return h.text.length > 25 ? h.text.substring(0, 25) : h.text;
     });
     
     if (habitNames.length === 1) {
-      details.push(`${habitNames[0]} to do`);
+      details.push(`${habitNames[0]} to tackle`);
     } else {
       details.push(`${habitNames[0]} and ${habitNames[1]} to do`);
     }
   }
   
-  // Construct the opener
+  // AGENTIC: Add calendar recommendations
+  if (calendarInsights?.recommendations?.length > 0) {
+    const rec = calendarInsights.recommendations[0];
+    if (rec.includes('focus')) {
+      details.push('good time for deep work');
+    } else if (rec.includes('busy')) {
+      details.push('busy day ahead');
+    }
+  }
+  
+  // Construct the intelligent opener
   if (details.length === 0) {
     return `${greeting} Quiet day scheduled. What's your main focus?`;
   }
@@ -157,6 +192,9 @@ function generateInformedOpener(habits, events, analysis) {
     return `${greeting} ${details[0]}. Ready?`;
   }
   
-  // Multiple items
-  return `${greeting} ${details.join(', ')}. What's first?`;
+  // Multiple items with agentic intelligence
+  return `${greeting} ${details.slice(0, 2).join(', ')}. What's first?`;
 }
+
+// AGENTIC: Export enhanced calendar client for use in other modules
+export { agenticCalendarClient };

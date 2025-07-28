@@ -1,256 +1,291 @@
-// Refactored gather.js for collaborative planning conversations
-import pkg from 'twilio';
-const { twiml } = pkg;
-import { llmReply } from '../utils/llmReply.js';
-import { generateGuidedResponse } from '../utils/guidedConversation.js';
-import { getSession, endSession } from '../utils/sessionManager.js';
-import { ctx } from '../memory/context.js';
-import { log, memory } from '../mongoClient.js';
+// routes/gather.js - Enhanced with agentic calendar operations
+import twiml from 'twilio/lib/twiml/VoiceResponse.js';
+import { llmReply, analyzeSessionStructure } from '../utils/llmReply.js';
+import { ctx } from '../utils/storage.js';
+import { generatePlanningSessionSummary } from '../utils/generatePlanningSessionSummary.js';
+import { notionClient } from '../utils/notionClient.js';
+import { agenticCalendarClient } from '../utils/agenticCalendarClient.js';
+import { EVENTS_ENDPOINT } from '../config.js';
 
 export async function handleGather(req, res) {
-  const userInput = req.body.SpeechResult;
+  const response = new twiml.VoiceResponse();
   const callSid = req.body.CallSid;
-  
-  console.log(`🗣️ User said: "${userInput}"`);
-  
-  if (!userInput) {
-    return handleSilence(req, res);
-  }
-  
+  const speechResult = req.body.SpeechResult?.trim();
+
+  console.log(`📞 Gather: ${speechResult}`);
+
   try {
-    const session = getSession(callSid);
+    if (!speechResult) {
+      response.say({ voice: 'Google.en-US-Neural2-I' }, 'Didn\'t catch that. What\'s your priority?');
+      response.gather({
+        input: 'speech',
+        action: '/gather',
+        speechTimeout: 'auto',
+        timeout: 5
+      });
+      response.hangup();
+      return res.type('text/xml').send(response.toString());
+    }
+
+    // Get conversation history
     const history = ctx.get(callSid) || [];
     
-    // Add user input to conversation history
-    history.push({ role: 'user', content: userInput });
-    
-    // Detect conversation phase and intent
-    const conversationPhase = detectConversationPhase(userInput, session);
-    const userIntent = analyzeUserIntent(userInput);
-    
-    console.log(`🧭 Conversation phase: ${conversationPhase}, Intent: ${userIntent}`);
-    
-    let assistantReply;
-    
-    // Generate contextual response based on phase
-    switch (conversationPhase) {
-      case 'exploration':
-        assistantReply = await generateExploratoryResponse(userInput, session, history);
-        break;
-      
-      case 'prioritization':
-        assistantReply = await generatePrioritizationResponse(userInput, session, history);
-        break;
-      
-      case 'commitment':
-        assistantReply = await generateCommitmentResponse(userInput, session, history);
-        break;
-      
-      case 'wrap_up':
-        assistantReply = await generateWrapUpResponse(userInput, session, history);
-        break;
-      
-      default:
-        assistantReply = await generateGuidedResponse(userInput, session, history);
+    // Add user input to history
+    history.push({ role: 'user', content: speechResult });
+
+    // ===== AGENTIC CALENDAR OPERATIONS =====
+    let toolResponse = null;
+    const lowerInput = speechResult.toLowerCase();
+
+    // CREATE operations
+    if (lowerInput.includes('schedule') || lowerInput.includes('add to calendar') || lowerInput.includes('put on calendar')) {
+      console.log('🤖 [AGENT] Detected schedule request');
+      toolResponse = await agenticCalendarClient.createQuickEvent(speechResult);
     }
     
-    // Track insights and patterns (not "performance")
-    trackPlanningInsights(userInput, assistantReply, session);
+    // READ operations  
+    else if (lowerInput.includes('what\'s on my calendar') || lowerInput.includes('my schedule') || lowerInput.includes('upcoming events')) {
+      console.log('🤖 [AGENT] Detected schedule inquiry');
+      const events = await agenticCalendarClient.getTodaysEvents();
+      const analysis = await agenticCalendarClient.analyzeSchedule();
+      
+      if (events.length === 0) {
+        toolResponse = { success: true, message: 'Your calendar is clear today.' };
+      } else {
+        const upcoming = events.filter(e => new Date(e.start) > new Date()).slice(0, 3);
+        const eventList = upcoming.map(e => `${e.title} at ${agenticCalendarClient.formatDateTime(e.start)}`).join(', ');
+        toolResponse = { 
+          success: true, 
+          message: `You have ${events.length} events today. Next up: ${eventList}` 
+        };
+      }
+    }
     
-    // Add assistant reply to history
+    // UPDATE operations
+    else if (lowerInput.includes('reschedule') || lowerInput.includes('move my')) {
+      console.log('🤖 [AGENT] Detected reschedule request');
+      // Extract event and new time (simplified)
+      const timeMatch = speechResult.match(/to (\d+(?::\d+)?\s*(?:am|pm)?)/i);
+      if (timeMatch) {
+        // For demo, reschedule the next event
+        const events = await agenticCalendarClient.getTodaysEvents();
+        const nextEvent = events.find(e => new Date(e.start) > new Date());
+        
+        if (nextEvent) {
+          toolResponse = await agenticCalendarClient.rescheduleEvent(nextEvent.id, timeMatch[1]);
+        } else {
+          toolResponse = { success: false, message: 'No upcoming events to reschedule.' };
+        }
+      }
+    }
+    
+    // DELETE operations
+    else if (lowerInput.includes('cancel') || lowerInput.includes('remove from calendar')) {
+      console.log('🤖 [AGENT] Detected cancel request');
+      // Extract event title
+      const cancelMatch = speechResult.match(/cancel (?:my )?(.+)/i);
+      if (cancelMatch) {
+        toolResponse = await agenticCalendarClient.cancelEventByTitle(cancelMatch[1]);
+      }
+    }
+    
+    // INTELLIGENT operations
+    else if (lowerInput.includes('when am i free') || lowerInput.includes('available time')) {
+      console.log('🤖 [AGENT] Detected availability inquiry');
+      const slots = await agenticCalendarClient.findAvailableSlots(60);
+      
+      if (slots.length > 0) {
+        const slotTimes = slots.map(s => agenticCalendarClient.formatDateTime(s.start)).join(', ');
+        toolResponse = { 
+          success: true, 
+          message: `You're free at: ${slotTimes}` 
+        };
+      } else {
+        toolResponse = { success: false, message: 'Your calendar looks pretty packed today.' };
+      }
+    }
+
+    // If we executed a tool, add the response to conversation
+    if (toolResponse) {
+      const toolMessage = toolResponse.success ? 
+        `✅ ${toolResponse.message}` : 
+        `❌ ${toolResponse.message}`;
+      
+      history.push({ role: 'assistant', content: toolMessage });
+      console.log('🤖 [AGENT] Tool executed:', toolMessage);
+      
+      // Respond with tool result and continue conversation
+      response.say({ voice: 'Google.en-US-Neural2-I' }, toolMessage);
+      response.say({ voice: 'Google.en-US-Neural2-I' }, 'What else?');
+      
+      response.gather({
+        input: 'speech',
+        action: '/gather',
+        speechTimeout: 'auto',
+        timeout: 6
+      });
+      
+      response.say({ voice: 'Google.en-US-Neural2-I' }, 'Good session. Execute those plans.');
+      response.hangup();
+      
+      // Update history
+      ctx.set(callSid, history);
+      
+      return res.type('text/xml').send(response.toString());
+    }
+
+    // ===== REGULAR CONVERSATION FLOW =====
+    
+    // Generate LLM response
+    const assistantReply = await llmReply(history);
+    console.log('🤖 LLM Reply:', assistantReply);
+
+    // Add assistant response to history
     history.push({ role: 'assistant', content: assistantReply });
-    ctx.set(callSid, history);
-    
-    // Enhanced session tracking
-    session.addExchange(userInput, assistantReply, {
-      phase: conversationPhase,
-      intent: userIntent,
-      approach: 'collaborative'
-    });
-    
-    console.log(`🤝 Assistant reply: "${assistantReply}"`);
-    
-    // Check if conversation feels complete
-    if (shouldOfferWrapUp(session, history)) {
-      assistantReply += " Does that feel like a good plan for now?";
+
+    // Check if conversation should end
+    const shouldEnd = checkEndConditions(speechResult, assistantReply, history.length);
+
+    if (shouldEnd) {
+      console.log('🏁 Ending conversation');
+      
+      // Generate session summary with agentic insights
+      const sessionSummary = await generateEnhancedSessionSummary(history, callSid);
+      
+      // Log to Notion if configured
+      if (process.env.NOTION_API_KEY) {
+        await notionClient.logMorningSession(sessionSummary);
+      }
+
+      response.say({ voice: 'Google.en-US-Neural2-I' }, assistantReply);
+      response.say({ voice: 'Google.en-US-Neural2-I' }, getEndingMessage(sessionSummary));
+      response.hangup();
+    } else {
+      // Continue conversation
+      response.say({ voice: 'Google.en-US-Neural2-I' }, assistantReply);
+      response.gather({
+        input: 'speech',
+        action: '/gather',
+        speechTimeout: 'auto',
+        timeout: 6
+      });
+      
+      response.say({ voice: 'Google.en-US-Neural2-I' }, 'Talk soon.');
+      response.hangup();
     }
+
+    // Update conversation history
+    ctx.set(callSid, history);
+
+    res.type('text/xml').send(response.toString());
+
+  } catch (error) {
+    console.error('❌ Gather handler error:', error);
     
-    const response = new twiml.VoiceResponse();
-    response.say({ voice: 'Google.en-US-Neural2-I' }, assistantReply);
-    
-    // Adaptive timeout based on conversation phase
-    const timeout = conversationPhase === 'exploration' ? 15 : 10;
-    
-    response.gather({ 
-      input: 'speech', 
-      action: '/gather', 
+    response.say({ voice: 'Google.en-US-Neural2-I' }, 'Let\'s focus. What\'s your main priority?');
+    response.gather({
+      input: 'speech',
+      action: '/gather',
       speechTimeout: 'auto',
-      timeout: timeout,
-      finishOnKey: '#'
+      timeout: 5
     });
+    response.hangup();
     
     res.type('text/xml').send(response.toString());
+  }
+}
+
+// Enhanced session summary with calendar insights
+async function generateEnhancedSessionSummary(history, callSid) {
+  console.log('📊 Generating enhanced session summary...');
+  
+  try {
+    // Get regular session analysis
+    const basicSummary = await generatePlanningSessionSummary(history, callSid);
     
+    // Add calendar insights
+    const calendarAnalysis = await agenticCalendarClient.analyzeSchedule();
+    
+    return {
+      ...basicSummary,
+      calendarInsights: {
+        totalEvents: calendarAnalysis?.totalEvents || 0,
+        upcomingEvents: calendarAnalysis?.upcomingEvents || 0,
+        timeUntilNext: calendarAnalysis?.timeUntilNext || null,
+        recommendations: calendarAnalysis?.recommendations || [],
+        agentActions: extractAgentActions(history)
+      },
+      type: 'enhanced_coaching_session_with_calendar'
+    };
   } catch (error) {
-    console.error('❌ Conversation error:', error);
-    return handleConversationError(req, res);
+    console.error('Enhanced summary failed:', error);
+    return await generatePlanningSessionSummary(history, callSid);
   }
 }
 
-// Detect what phase of planning conversation we're in
-function detectConversationPhase(userInput, session) {
-  const input = userInput.toLowerCase();
-  const exchangeCount = session.sessionData.conversation?.length || 0;
+// Extract what the agent did during the session
+function extractAgentActions(history) {
+  const actions = [];
   
-  // Early conversation - still exploring
-  if (exchangeCount < 3) {
-    return 'exploration';
-  }
+  history.forEach(msg => {
+    if (msg.role === 'assistant' && msg.content.includes('✅')) {
+      actions.push({
+        type: 'success',
+        action: msg.content.replace('✅ ', ''),
+        timestamp: new Date()
+      });
+    } else if (msg.role === 'assistant' && msg.content.includes('❌')) {
+      actions.push({
+        type: 'error',
+        action: msg.content.replace('❌ ', ''),
+        timestamp: new Date()
+      });
+    }
+  });
   
-  // Looking for priorities
-  if (input.includes('important') || input.includes('priority') || input.includes('focus')) {
-    return 'prioritization';
-  }
-  
-  // Making commitments
-  if (input.includes('will') || input.includes('going to') || input.includes('plan to')) {
-    return 'commitment';
-  }
-  
-  // Ready to wrap up
-  if (input.includes('done') || input.includes('good') || input.includes('ready') || exchangeCount > 8) {
-    return 'wrap_up';
-  }
-  
-  return 'exploration';
+  return actions;
 }
 
-// Understand what the user is trying to communicate
-function analyzeUserIntent(userInput) {
-  const input = userInput.toLowerCase();
+// Check if conversation should end
+function checkEndConditions(userInput, assistantReply, historyLength) {
+  const userLower = userInput.toLowerCase();
+  const replyLower = assistantReply.toLowerCase();
   
-  if (input.includes('tired') || input.includes('overwhelmed') || input.includes('busy')) {
-    return 'expressing_constraints';
+  // Explicit endings
+  if (userLower.includes('bye') || userLower.includes('done') || userLower.includes('that\'s it')) {
+    return true;
   }
   
-  if (input.includes('want to') || input.includes('need to') || input.includes('should')) {
-    return 'identifying_tasks';
+  // Assistant suggests ending
+  if (replyLower.includes('sounds good') || replyLower.includes('you\'re set')) {
+    return true;
   }
   
-  if (input.includes('time') || input.includes('when') || input.includes('schedule')) {
-    return 'discussing_timing';
+  // Long conversation
+  if (historyLength > 12) {
+    return true;
   }
-  
-  if (input.includes('yes') || input.includes('that works') || input.includes('sounds good')) {
-    return 'confirming';
-  }
-  
-  return 'general_discussion';
-}
-
-// Generate responses for each conversation phase
-async function generateExploratoryResponse(userInput, session, history) {
-  // Focus on understanding their day and energy
-  const exploratoryPrompts = [
-    "What's going through your mind about today?",
-    "How does your energy feel for tackling things?",
-    "What would make today feel successful?",
-    "Is there anything weighing on you that we should factor in?"
-  ];
-  
-  // Use LLM but with guidance toward exploration
-  return await generateGuidedResponse(userInput, session, history, 'exploration');
-}
-
-async function generatePrioritizationResponse(userInput, session, history) {
-  // Help them think through what matters most
-  return await generateGuidedResponse(userInput, session, history, 'prioritization');
-}
-
-async function generateCommitmentResponse(userInput, session, history) {
-  // Support their decision-making without pressure
-  return await generateGuidedResponse(userInput, session, history, 'commitment');
-}
-
-async function generateWrapUpResponse(userInput, session, history) {
-  // Gentle closure and encouragement
-  return await generateGuidedResponse(userInput, session, history, 'wrap_up');
-}
-
-// Track insights about their planning process (not performance)
-function trackPlanningInsights(userInput, assistantReply, session) {
-  const input = userInput.toLowerCase();
-  
-  // Track energy patterns
-  if (input.includes('tired')) {
-    session.addInsight('energy_pattern', 'reports_low_energy');
-  }
-  
-  if (input.includes('excited') || input.includes('ready')) {
-    session.addInsight('energy_pattern', 'reports_high_energy');
-  }
-  
-  // Track planning preferences
-  if (input.includes('list') || input.includes('order')) {
-    session.addInsight('planning_style', 'prefers_structure');
-  }
-  
-  if (input.includes('feel') || input.includes('think')) {
-    session.addInsight('planning_style', 'intuitive_approach');
-  }
-}
-
-// Determine if conversation feels naturally complete
-function shouldOfferWrapUp(session, history) {
-  const exchangeCount = history.length;
-  const userMessages = history.filter(msg => msg.role === 'user');
-  
-  // Offer wrap-up if:
-  // - They've made some commitments
-  // - Conversation has gone on for a while
-  // - They seem satisfied with their plan
-  
-  if (exchangeCount > 10) return true;
-  if (session.sessionData.commitments?.length > 0 && exchangeCount > 6) return true;
   
   return false;
 }
 
-// Handle silence more gently
-function handleSilence(req, res) {
-  const response = new twiml.VoiceResponse();
-  response.say({ 
-    voice: 'Google.en-US-Neural2-I' 
-  }, 'Take your time thinking about it. What feels right to you?');
+// Get ending message based on session insights
+function getEndingMessage(sessionSummary) {
+  const messages = [
+    'Good session. Execute those plans.',
+    'Solid check-in. Make it happen.',
+    'Plans set. Time to work.',
+    'Clear priorities. Go execute.'
+  ];
   
-  response.gather({ 
-    input: 'speech', 
-    action: '/gather', 
-    speechTimeout: 'auto',
-    timeout: 12
-  });
+  // Add calendar-aware endings
+  if (sessionSummary.calendarInsights?.upcomingEvents > 0) {
+    messages.push('Calendar updated. Next event coming up.');
+  }
   
-  response.say({ 
-    voice: 'Google.en-US-Neural2-I' 
-  }, 'No worries. Talk to you later!');
-  response.hangup();
+  if (sessionSummary.calendarInsights?.agentActions?.length > 0) {
+    messages.push('Calendar changes made. You\'re all set.');
+  }
   
-  return res.type('text/xml').send(response.toString());
-}
-
-// Handle errors more gracefully
-function handleConversationError(req, res) {
-  const response = new twiml.VoiceResponse();
-  response.say({ 
-    voice: 'Google.en-US-Neural2-I' 
-  }, "Something got mixed up on my end. What were you saying about your priorities?");
-  
-  response.gather({ 
-    input: 'speech', 
-    action: '/gather', 
-    speechTimeout: 'auto',
-    timeout: 10
-  });
-  
-  return res.type('text/xml').send(response.toString());
+  return messages[Math.floor(Math.random() * messages.length)];
 }
