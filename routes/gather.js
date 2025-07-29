@@ -1,11 +1,10 @@
 // routes/gather.js - Enhanced with agentic calendar operations
 import twiml from 'twilio/lib/twiml/VoiceResponse.js';
-import { llmReply, analyzeSessionStructure } from '../utils/llmReply.js';
+import { llmReply } from '../utils/llmReply.js';
 import { ctx } from '../utils/storage.js';
 import { generatePlanningSessionSummary } from '../utils/generatePlanningSessionSummary.js';
 import { notionClient } from '../utils/notionClient.js';
 import { agenticCalendarClient } from '../utils/agenticCalendarClient.js';
-import { EVENTS_ENDPOINT } from '../config.js';
 
 export async function handleGather(req, res) {
   const response = new twiml.VoiceResponse();
@@ -200,8 +199,8 @@ async function generateEnhancedSessionSummary(history, callSid) {
   console.log('📊 Generating enhanced session summary...');
   
   try {
-    // Get regular session analysis
-    const basicSummary = await generatePlanningSessionSummary(history, callSid);
+    // Get regular session analysis (using your existing function signature)
+    const basicSummary = await generatePlanningSessionSummary(callSid);
     
     // Add calendar insights
     const calendarAnalysis = await agenticCalendarClient.analyzeSchedule();
@@ -219,7 +218,8 @@ async function generateEnhancedSessionSummary(history, callSid) {
     };
   } catch (error) {
     console.error('Enhanced summary failed:', error);
-    return await generatePlanningSessionSummary(history, callSid);
+    // Fallback to basic summary
+    return await generatePlanningSessionSummary(callSid);
   }
 }
 
