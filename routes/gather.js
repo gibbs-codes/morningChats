@@ -1,5 +1,5 @@
 // routes/gather.js - Enhanced with agentic calendar operations
-import twiml from 'twilio/lib/twiml/VoiceResponse.js';
+import twilio from 'twilio';
 import { llmReply } from '../utils/llmReply.js';
 import { ctx } from '../utils/storage.js';
 import { generatePlanningSessionSummary } from '../utils/generatePlanningSessionSummary.js';
@@ -7,7 +7,7 @@ import { notionClient } from '../utils/notionClient.js';
 import { agenticCalendarClient } from '../utils/agenticCalendarClient.js';
 
 export async function handleGather(req, res) {
-  const response = new twiml.VoiceResponse();
+  const response = new twilio.twiml.VoiceResponse();
   const callSid = req.body.CallSid;
   const speechResult = req.body.SpeechResult?.trim();
 

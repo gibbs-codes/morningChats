@@ -5,7 +5,7 @@ import fetch from 'node-fetch';
 
 class AgenticCalendarClient {
   constructor() {
-    this.baseUrl = process.env.CALENDAR_SERVICE_URL || 'http://localhost:3000';
+    this.baseUrl = process.env.CALENDAR_SERVICE_URL || 'http://cal.local:3000';
     this.timeout = 15000; // 15 second timeout for agentic operations
   }
 
