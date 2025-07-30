@@ -8,7 +8,7 @@ import { z } from "zod";
 function createLLMProvider() {
   if (process.env.LLM_PROVIDER === 'ollama') {
     return new ChatOllama({
-      baseUrl: "http://localhost:11434",
+      baseUrl: "http://host.docker.internal:11434",
       model: "qwen:7b-chat",
       temperature: 0.4,
     });
@@ -60,7 +60,7 @@ export async function llmReply(history) {
     
   } catch (error) {
     console.error('LLM Reply Error:', error);
-    return "Let's focus. What's your top priority right now?";
+    return "What feels most important to focus on this morning?";
   }
 }
 
@@ -202,7 +202,7 @@ Response:
     
   } catch (error) {
     console.error('Conversational response error:', error);
-    return "What's your main focus right now?";
+    return "What would be most helpful to talk through right now?";
   }
 }
 
@@ -403,6 +403,6 @@ OTHERWISE: Just respond normally as their morning coach. Keep responses under 30
     
   } catch (error) {
     console.error('LLM Reply With Tools Error:', error);
-    return { type: 'message', content: "Let's stay focused. What's your main goal this morning?" };
+    return { type: 'message', content: "What feels most important to tackle first today?" };
   }
 }
